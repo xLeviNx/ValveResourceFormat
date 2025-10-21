@@ -159,9 +159,9 @@ namespace GUI.Types.Viewers
                 }
 
                 // Add metadata
-                if (entity.ParentLump.Resource != null)
+                if (entity.ParentLump.Resource?.FileName is { } fileName)
                 {
-                    entityData["source_lump"] = entity.ParentLump.Resource.FileName;
+                    entityData["source_lump"] = fileName;
                 }
 
                 exportList.Add(entityData);
