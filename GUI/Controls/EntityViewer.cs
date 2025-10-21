@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Windows.Forms;
+using System.Text.Json;
 using GUI.Utils;
 using ValveResourceFormat.Serialization.KeyValues;
 using static ValveResourceFormat.ResourceTypes.EntityLump;
@@ -35,10 +36,144 @@ namespace GUI.Types.Viewers
 
             Entities = entities;
             SelectEntityFunc = selectAndFocusEntity;
+            
+            // Enable multi-select on the grid
+            EntityViewerGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            EntityViewerGrid.MultiSelect = true;
+            
             EntityInfo.OutputsGrid.CellDoubleClick += EntityInfoGrid_CellDoubleClick;
             EntityInfo.ResourceAddDataGridExternalRef(guiContext.FileLoader);
 
+            // Add export button
+            AddExportButton();
+
             UpdateGrid();
+        }
+
+        private void AddExportButton()
+        {
+            var exportButton = new Button
+            {
+                Text = "Export Selected to JSON",
+                AutoSize = true,
+                Margin = new Padding(5)
+            };
+            exportButton.Click += ExportButton_Click;
+
+            // Add button to the controls (adjust based on your actual layout)
+            // You may need to add this to a specific panel in your form designer
+            Controls.Add(exportButton);
+            exportButton.BringToFront();
+        }
+
+        private void ExportButton_Click(object? sender, EventArgs e)
+        {
+            var selectedEntities = GetSelectedEntities();
+            
+            if (selectedEntities.Count == 0)
+            {
+                MessageBox.Show("No entities selected. Please select one or more entities to export.", 
+                    "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            using var saveDialog = new SaveFileDialog
+            {
+                Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*",
+                DefaultExt = "json",
+                FileName = "entities_export.json"
+            };
+
+            if (saveDialog.ShowDialog() == DialogResult.OK)
+            {
+                try
+                {
+                    var exportData = BuildExportData(selectedEntities);
+                    var json = JsonSerializer.Serialize(exportData, new JsonSerializerOptions 
+                    { 
+                        WriteIndented = true 
+                    });
+                    
+                    File.WriteAllText(saveDialog.FileName, json);
+                    MessageBox.Show($"Successfully exported {selectedEntities.Count} entities to:\n{saveDialog.FileName}", 
+                        "Export Successful", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Error exporting entities: {ex.Message}", 
+                        "Export Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        private List<Entity> GetSelectedEntities()
+        {
+            var entities = new List<Entity>();
+            
+            foreach (DataGridViewRow row in EntityViewerGrid.SelectedRows)
+            {
+                if (row.Tag is Entity entity)
+                {
+                    entities.Add(entity);
+                }
+            }
+            
+            return entities;
+        }
+
+        private object BuildExportData(List<Entity> entities)
+        {
+            var exportList = new List<Dictionary<string, object>>();
+
+            foreach (var entity in entities)
+            {
+                var entityData = new Dictionary<string, object>();
+                var properties = new Dictionary<string, object>();
+
+                // Add all properties
+                foreach (var (key, value) in entity.Properties)
+                {
+                    properties[key] = value switch
+                    {
+                        null => string.Empty,
+                        KVObject { IsArray: true } kvArray => kvArray.Select(p => p.Value?.ToString() ?? string.Empty).ToList(),
+                        _ => value.ToString() ?? string.Empty
+                    };
+                }
+
+                entityData["properties"] = properties;
+
+                // Add connections if they exist
+                if (entity.Connections != null && entity.Connections.Count > 0)
+                {
+                    var connections = entity.Connections.Select(c => new Dictionary<string, object>
+                    {
+                        ["output"] = c.Output ?? string.Empty,
+                        ["target"] = c.Target ?? string.Empty,
+                        ["input"] = c.Input ?? string.Empty,
+                        ["parameter"] = c.Overrides ?? string.Empty,
+                        ["delay"] = c.Delay,
+                        ["timesToFire"] = c.TimesToFire
+                    }).ToList();
+
+                    entityData["connections"] = connections;
+                }
+
+                // Add metadata
+                if (entity.ParentLump.Resource is { } parentResource)
+                {
+                    entityData["source_lump"] = parentResource.FileName;
+                }
+
+                exportList.Add(entityData);
+            }
+
+            return new Dictionary<string, object>
+            {
+                ["entity_count"] = entities.Count,
+                ["export_date"] = DateTime.Now.ToString("o"),
+                ["entities"] = exportList
+            };
         }
 
         private void UpdateGrid()
