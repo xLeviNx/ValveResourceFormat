@@ -1,7 +1,6 @@
 using System.Linq;
 using System.Windows.Forms;
 using System.Text.Json;
-using System.IO;
 using GUI.Utils;
 using ValveResourceFormat.Serialization.KeyValues;
 using static ValveResourceFormat.ResourceTypes.EntityLump;
@@ -13,7 +12,6 @@ namespace GUI.Types.Viewers
         private readonly SearchDataClass SearchData = new();
         private readonly List<Entity> Entities = [];
         private readonly Action<Entity>? SelectEntityFunc;
-        private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
         public enum ObjectsToInclude
         {
@@ -91,7 +89,10 @@ namespace GUI.Types.Viewers
                 try
                 {
                     var exportData = BuildExportData(selectedEntities);
-                    var json = JsonSerializer.Serialize(exportData, JsonOptions);
+                    var json = JsonSerializer.Serialize(exportData, new JsonSerializerOptions 
+                    { 
+                        WriteIndented = true 
+                    });
                     
                     File.WriteAllText(saveDialog.FileName, json);
                     MessageBox.Show($"Successfully exported {selectedEntities.Count} entities to:\n{saveDialog.FileName}", 
@@ -120,7 +121,7 @@ namespace GUI.Types.Viewers
             return entities;
         }
 
-        private static Dictionary<string, object> BuildExportData(List<Entity> entities)
+        private object BuildExportData(List<Entity> entities)
         {
             var exportList = new List<Dictionary<string, object>>();
 
@@ -147,21 +148,21 @@ namespace GUI.Types.Viewers
                 {
                     var connections = entity.Connections.Select(c => new Dictionary<string, object>
                     {
-                        ["output"] = c.GetProperty<string>("m_outputName") ?? string.Empty,
-                        ["target"] = c.GetProperty<string>("m_targetName") ?? string.Empty,
-                        ["input"] = c.GetProperty<string>("m_inputName") ?? string.Empty,
-                        ["parameter"] = c.GetProperty<string>("m_overrideParam") ?? string.Empty,
-                        ["delay"] = c.GetProperty<float>("m_flDelay"),
-                        ["timesToFire"] = c.GetProperty<int>("m_nTimesToFire")
+                        ["output"] = c.Output ?? string.Empty,
+                        ["target"] = c.Target ?? string.Empty,
+                        ["input"] = c.Input ?? string.Empty,
+                        ["parameter"] = c.Overrides ?? string.Empty,
+                        ["delay"] = c.Delay,
+                        ["timesToFire"] = c.TimesToFire
                     }).ToList();
 
                     entityData["connections"] = connections;
                 }
 
                 // Add metadata
-                if (entity.ParentLump.Resource?.FileName is { } fileName)
+                if (entity.ParentLump.Resource is { } parentResource)
                 {
-                    entityData["source_lump"] = fileName;
+                    entityData["source_lump"] = parentResource.FileName;
                 }
 
                 exportList.Add(entityData);
