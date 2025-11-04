@@ -10,16 +10,37 @@
 #define S_SCENE_CUBEMAP_TYPE 0 // 0 = None, 1 = Per-batch cube map, 2 = Per-scene cube map array
 #define renderMode_Cubemaps 0
 
+struct EnvMapData
+{
+    mat4 WorldToLocal;
+    vec3 BoxMins;
+    uint ArrayIndex;
+    vec3 BoxMaxs;
+    uint _padding1;
+    vec4 InvEdgeWidth;
+    vec3 Origin;
+    uint ProjectionType;
+    vec3 Color;
+    uint AssociatedLPV;
+    vec4 NormalizationSH;
+};
+
+// Maximum number of environment maps supported
+#define MAX_ENVMAPS 128
+
+layout(std140, binding = 2) uniform EnvMapArray
+{
+    EnvMapData envMaps[MAX_ENVMAPS];
+};
 
 #if (S_SCENE_CUBEMAP_TYPE == 0)
     // ...
 #elif (S_SCENE_CUBEMAP_TYPE == 1)
     uniform samplerCube g_tEnvironmentMap;
-    uniform int g_iEnvMapArrayIndices;
+    uniform uvec4 g_nEnvMapVisibility;
 #elif (S_SCENE_CUBEMAP_TYPE == 2)
     uniform samplerCubeArray g_tEnvironmentMap;
-    uniform int g_iEnvMapArrayIndices[MAX_ENVMAPS];
-    uniform int g_iEnvMapArrayLength;
+    uniform uvec4 g_nEnvMapVisibility;
 #endif
 
 vec3 CubemapParallaxCorrection(vec3 envMapLocalPos, vec3 localReflectionVector, vec3 envMapBoxMin, vec3 envMapBoxMax)
@@ -161,12 +182,12 @@ vec3 GetEnvironmentNoBRDF(MaterialProperties_t mat, float roughnessReflectionCor
     #if (S_SCENE_CUBEMAP_TYPE == 0)
         envMap = vec3(0.3, 0.1, 0.1);
     #elif (S_SCENE_CUBEMAP_TYPE == 1)
-        int envMapArrayIndex = g_iEnvMapArrayIndices;
-        vec4 proxySphere = g_vEnvMapProxySphere[envMapArrayIndex];
-        bool isBoxProjection = proxySphere.w == 1.0f;
-        vec3 envMapBoxMin = g_vEnvMapBoxMins[envMapArrayIndex].xyz;
-        vec3 envMapBoxMax = g_vEnvMapBoxMaxs[envMapArrayIndex].xyz;
-        mat4x3 envMapWorldToLocal = mat4x3(g_matEnvMapWorldToLocal[envMapArrayIndex]);
+        int envMapIndex = int(g_nEnvMapVisibility.x);
+        EnvMapData envData = envMaps[envMapIndex];
+        bool isBoxProjection = envData.ProjectionType == 1u;
+        vec3 envMapBoxMin = envData.BoxMins;
+        vec3 envMapBoxMax = envData.BoxMaxs;
+        mat4x3 envMapWorldToLocal = mat4x3(envData.WorldToLocal);
         vec3 envMapLocalPos = envMapWorldToLocal * vec4(vFragPosition, 1.0);
 
         vec3 coords = GetCorrectedSampleCoords(R, envMapWorldToLocal, envMapLocalPos, isBoxProjection, envMapBoxMin, envMapBoxMax);
@@ -175,48 +196,60 @@ vec3 GetEnvironmentNoBRDF(MaterialProperties_t mat, float roughnessReflectionCor
         envMap = textureLod(g_tEnvironmentMap, coords, lod).rgb;
     #elif (S_SCENE_CUBEMAP_TYPE == 2)
 
-    float totalWeight = 0.01;
+    float flTotalWeight = 0.01;
+    bool bContinueLoop = true;
 
-    for (int i = 0; i < g_iEnvMapArrayLength; i++)
+    for (uint visBucket = 0; visBucket < 4 && bContinueLoop; visBucket++)
     {
-        int envMapArrayIndex = g_iEnvMapArrayIndices[i];
-        vec4 proxySphere = g_vEnvMapProxySphere[envMapArrayIndex];
-        bool isBoxProjection = proxySphere.w == 1.0f;
-        vec3 envMapBoxMin = g_vEnvMapBoxMins[envMapArrayIndex].xyz - vec3(0.01);
-        vec3 envMapBoxMax = g_vEnvMapBoxMaxs[envMapArrayIndex].xyz + vec3(0.01);
-        mat4x3 envMapWorldToLocal = mat4x3(g_matEnvMapWorldToLocal[envMapArrayIndex]);
-        vec3 envMapLocalPos = envMapWorldToLocal * vec4(vFragPosition, 1.0);
-        float weight = 1.0f;
+        uint mask = g_nEnvMapVisibility[visBucket];
+        int baseIndex = int(visBucket * 32);
 
-        const bool bUseCubemapBlending = S_LIGHTMAP_VERSION_MINOR >= 2;
-        vec3 dists = g_vEnvMapEdgeFadeDists[envMapArrayIndex].xyz;
-
-        if (bUseCubemapBlending && isBoxProjection)
+        while (mask != 0 && bContinueLoop)
         {
-            vec3 envInvEdgeWidth = 1.0 / dists;
-            vec3 envmapClampedFadeMax = clamp((envMapBoxMax - envMapLocalPos) * envInvEdgeWidth, vec3(0.0), vec3(1.0));
-            vec3 envmapClampedFadeMin = clamp((envMapLocalPos - envMapBoxMin) * envInvEdgeWidth, vec3(0.0), vec3(1.0));
-            float distanceFromEdge = min(min3(envmapClampedFadeMin), min3(envmapClampedFadeMax));
+            // Find index of least significant set bit
+            int bit = findLSB(mask);
 
-            if (distanceFromEdge == 0.0)
+            // Clear the processed bit
+            mask &= ~(1u << bit);
+
+            int envMapIndex = baseIndex + bit;
+
+            EnvMapData envData = envMaps[envMapIndex];
+            bool isBoxProjection = envData.ProjectionType == 1u;
+            vec3 envMapBoxMin = envData.BoxMins;
+            vec3 envMapBoxMax = envData.BoxMaxs;
+            mat4x3 envMapWorldToLocal = mat4x3(envData.WorldToLocal);
+            vec3 envMapLocalPos = envMapWorldToLocal * vec4(vFragPosition, 1.0);
+            float weight = 1.0f;
+
+            const bool bUseCubemapBlending = S_LIGHTMAP_VERSION_MINOR >= 2;
+            if (bUseCubemapBlending && isBoxProjection)
             {
-                continue;
+                vec3 envInvEdgeWidth = envData.InvEdgeWidth.xyz;
+                vec3 envmapClampedFadeMax = clamp((envMapBoxMax - envMapLocalPos) * envInvEdgeWidth, vec3(0.0), vec3(1.0));
+                vec3 envmapClampedFadeMin = clamp((envMapLocalPos - envMapBoxMin) * envInvEdgeWidth, vec3(0.0), vec3(1.0));
+                float distanceFromEdge = min(min3(envmapClampedFadeMin), min3(envmapClampedFadeMax));
+
+                if (distanceFromEdge == 0.0)
+                {
+                    continue;
+                }
+
+                // blend using a smooth curve
+                weight = (pow2(distanceFromEdge) * (3.0 - (2.0 * distanceFromEdge))) * (1.0 - flTotalWeight);
             }
 
-            // blend using a smooth curve
-            weight = (pow2(distanceFromEdge) * (3.0 - (2.0 * distanceFromEdge))) * (1.0 - totalWeight);
-        }
+            flTotalWeight += weight;
 
-        totalWeight += weight;
+            vec3 coords = GetCorrectedSampleCoords(R, envMapWorldToLocal, envMapLocalPos, isBoxProjection, envMapBoxMin, envMapBoxMax);
+            coords = mix(coords, mat.AmbientNormal, flAmbientNormalMix);
 
-        vec3 coords = GetCorrectedSampleCoords(R, envMapWorldToLocal, envMapLocalPos, isBoxProjection, envMapBoxMin, envMapBoxMax);
-        coords = mix(coords, mat.AmbientNormal, flAmbientNormalMix);
+            envMap += textureLod(g_tEnvironmentMap, vec4(coords, envData.ArrayIndex), lod).rgb * weight;
 
-        envMap += textureLod(g_tEnvironmentMap, vec4(coords, envMapArrayIndex), lod).rgb * weight;
-
-        if (totalWeight > 0.99)
-        {
-            break;
+            if (flTotalWeight > 0.99)
+            {
+                bContinueLoop = false;
+            }
         }
     }
 

@@ -40,7 +40,8 @@ namespace GUI.Types.Renderer
         public WorldPostProcessInfo PostProcessInfo { get; set; } = new();
 
         private UniformBuffer<LightingConstants> lightingBuffer;
-
+        public UniformBuffer<EnvMapArray> envMapBuffer;
+        private UniformBuffer<LightProbeVolumeArray> lpvBuffer;
 
         public VrfGuiContext GuiContext { get; }
         public Octree StaticOctree { get; }
@@ -69,9 +70,11 @@ namespace GUI.Types.Renderer
         public void Initialize()
         {
             UpdateOctrees();
+            CreateBuffers();
             CalculateLightProbeBindings();
             CalculateEnvironmentMaps();
-            CreateBuffers();
+
+            UpdateBuffers();
 
             OutlineShader = GuiContext.ShaderLoader.LoadShader("vrf.outline");
         }
@@ -174,16 +177,23 @@ namespace GUI.Types.Renderer
             {
                 Data = LightingInfo.LightingData
             };
+
+            envMapBuffer = new(ReservedBufferSlots.EnvironmentMap);
+            lpvBuffer = new(ReservedBufferSlots.LightProbe);
         }
 
         public void UpdateBuffers()
         {
             lightingBuffer.Update();
+            envMapBuffer.Update();
+            lpvBuffer.Update();
         }
 
         public void SetSceneBuffers()
         {
             lightingBuffer.BindBufferBase();
+            envMapBuffer.BindBufferBase();
+            lpvBuffer.BindBufferBase();
         }
 
         private readonly List<SceneNode> CullResults = [];
@@ -774,6 +784,7 @@ namespace GUI.Types.Renderer
 
             var nodes = new List<SceneNode>();
 
+            var i = 0;
             foreach (var probe in sortedLightProbes)
             {
                 StaticOctree.Root.Query(probe.BoundingBox, nodes);
@@ -784,7 +795,12 @@ namespace GUI.Types.Renderer
                     node.LightProbeBinding ??= probe;
                 }
 
+                probe.ShaderIndex = i;
+                var data = probe.CalculateGpuProbeData(LightingInfo.LightProbeType == LightProbeType.ProbeAtlas);
+                lpvBuffer.Data.Probes[i] = data;
+
                 nodes.Clear();
+                i++;
             }
 
             // Assign random probe to any node that does not have any light probes to fix the flickering,
@@ -808,12 +824,12 @@ namespace GUI.Types.Renderer
 
             LightingInfo.LightingData.EnvMapSizeConstants = new Vector4(firstTexture.NumMipLevels - 1, firstTexture.Depth, 0, 0);
 
-            int ArrayIndexCompare(SceneEnvMap a, SceneEnvMap b) => a.ArrayIndex.CompareTo(b.ArrayIndex);
+            int IndoorPriorityCompare(SceneEnvMap a, SceneEnvMap b) => b.IndoorOutdoorLevel.CompareTo(a.IndoorOutdoorLevel);
             int HandShakeCompare(SceneEnvMap a, SceneEnvMap b) => a.HandShake.CompareTo(b.HandShake);
 
             LightingInfo.EnvMaps.Sort(LightingInfo.CubemapType switch
             {
-                CubemapType.CubemapArray => ArrayIndexCompare,
+                CubemapType.CubemapArray => IndoorPriorityCompare,
                 _ => HandShakeCompare
             });
 
@@ -822,15 +838,10 @@ namespace GUI.Types.Renderer
 
             foreach (var envMap in LightingInfo.EnvMaps)
             {
-                if (i >= LightingConstants.MAX_ENVMAPS)
+                if (i >= EnvMapArray.MAX_ENVMAPS)
                 {
-                    Log.Error(nameof(WorldLoader), $"Envmap array index {i} is too large, skipping! Max: {LightingConstants.MAX_ENVMAPS}");
+                    Log.Error(nameof(WorldLoader), $"Envmap array index {i} is too large, skipping! Max: {EnvMapArray.MAX_ENVMAPS}");
                     continue;
-                }
-
-                if (LightingInfo.CubemapType == CubemapType.CubemapArray)
-                {
-                    Debug.Assert(envMap.ArrayIndex == i, "Envmap array index mismatch");
                 }
 
                 StaticOctree.Root.Query(envMap.BoundingBox, nodes);
@@ -842,6 +853,7 @@ namespace GUI.Types.Renderer
                 }
 
                 UpdateGpuEnvmapData(envMap, i);
+                envMap.ShaderIndex = i;
                 i++;
 
                 nodes.Clear();
@@ -917,19 +929,7 @@ namespace GUI.Types.Renderer
                     return aDistance.CompareTo(bDistance);
                 });
 
-                /*
-                const int max = 16;
-                if (node.EnvMaps.Count > max)
-                {
-                    Log.Warn("Renderer", $"Performance warning: more than {max} envmaps binned for node {node.DebugName}");
-                }
-                */
-
-                node.EnvMapIds = LightingInfo.CubemapType switch
-                {
-                    CubemapType.CubemapArray => node.EnvMaps.Select(x => x.ArrayIndex).ToArray(),
-                    _ => node.EnvMaps.Select(e => LightingInfo.EnvMaps.IndexOf(e)).ToArray()
-                };
+                node.ShaderEnvMapVisibility = node.ShaderEnvMapVisibility.Store(node.EnvMaps);
 
 #if DEBUG
                 if (preComputed != default)
@@ -965,25 +965,32 @@ namespace GUI.Types.Renderer
 
         private void UpdateGpuEnvmapData(SceneEnvMap envMap, int index)
         {
-            if (!Matrix4x4.Invert(envMap.Transform, out var invertedTransform))
+            if (!Matrix4x4.Invert(envMap.Transform, out var worldToLocal))
             {
                 throw new InvalidOperationException("Matrix invert failed");
             }
 
-            LightingInfo.LightingData.EnvMapWorldToLocal[index] = invertedTransform;
-            LightingInfo.LightingData.EnvMapBoxMins[index] = new Vector4(envMap.LocalBoundingBox.Min, 0);
-            LightingInfo.LightingData.EnvMapBoxMaxs[index] = new Vector4(envMap.LocalBoundingBox.Max, 0);
-            LightingInfo.LightingData.EnvMapEdgeInvEdgeWidth[index] = new Vector4(envMap.EdgeFadeDists, 0);
-            LightingInfo.LightingData.EnvMapProxySphere[index] = new Vector4(envMap.Transform.Translation, envMap.ProjectionMode);
-            LightingInfo.LightingData.EnvMapColorRotated[index] = new Vector4(envMap.Tint, 0);
+            var boundsExtend = new Vector3(0.02f);
 
-            // TODO
-            LightingInfo.LightingData.EnvMapNormalizationSH[index] = new Vector4(0, 0, 0, 1);
+            envMapBuffer.Data.EnvMaps[index] = new EnvMapData
+            {
+                WorldToLocal = worldToLocal,
+                BoxMins = envMap.LocalBoundingBox.Min - boundsExtend,
+                ArrayIndex = (uint)envMap.ArrayIndex,
+                BoxMaxs = envMap.LocalBoundingBox.Max + boundsExtend,
+                InvEdgeWidth = new Vector4(Vector3.One / (envMap.EdgeFadeDists + boundsExtend), 0),
+                Origin = envMap.Transform.Translation,
+                ProjectionType = (uint)envMap.ProjectionMode,
+                Color = envMap.Tint,
+                NormalizationSH = new Vector4(0, 0, 0, 1)
+            };
         }
 
         public void Dispose()
         {
             lightingBuffer?.Dispose();
+            lpvBuffer?.Dispose();
+            envMapBuffer?.Dispose();
         }
     }
 }

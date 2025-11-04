@@ -23,66 +23,7 @@
         uniform sampler2DArray g_tDirectLightShadows;
     #endif
 #elif (D_BAKED_LIGHTING_FROM_PROBE == 1)
-
-    uniform sampler3D g_tLPV_Irradiance;
-
-    #if (S_LIGHTMAP_VERSION_MINOR == 1)
-        uniform sampler3D g_tLPV_Indices;
-        uniform sampler3D g_tLPV_Scalars;
-    #elif (S_LIGHTMAP_VERSION_MINOR >= 2)
-        uniform sampler3D g_tLPV_Shadows;
-    #endif
-
-    layout(std140, binding = 2) uniform LightProbeVolume
-    {
-        uniform mat4 g_matLightProbeVolumeWorldToLocal;
-        #if (S_SCENE_PROBE_TYPE == 1)
-            vec4 g_vLightProbeVolumeLayer0TextureMin;
-            vec4 g_vLightProbeVolumeLayer0TextureMax;
-        #elif (S_SCENE_PROBE_TYPE == 2)
-            vec4 g_vLightProbeVolumeBorderMin;
-            vec4 g_vLightProbeVolumeBorderMax;
-            vec4 g_vLightProbeVolumeAtlasScale;
-            vec4 g_vLightProbeVolumeAtlasOffset;
-        #endif
-    };
-
-    vec3 CalculateProbeSampleCoords(vec3 fragPosition)
-    {
-        vec3 vLightProbeLocalPos = mat4x3(g_matLightProbeVolumeWorldToLocal) * vec4(fragPosition, 1.0);
-        return vLightProbeLocalPos;
-    }
-
-    vec3 CalculateProbeShadowCoords(vec3 fragPosition)
-    {
-        vec3 vLightProbeLocalPos = CalculateProbeSampleCoords(fragPosition);
-
-        #if (S_SCENE_PROBE_TYPE == 2)
-            vLightProbeLocalPos = fma(saturate(vLightProbeLocalPos), g_vLightProbeVolumeAtlasScale.xyz, g_vLightProbeVolumeAtlasOffset.xyz);
-        #endif
-
-        return vLightProbeLocalPos;
-    }
-
-    vec3 CalculateProbeIndirectCoords(vec3 fragPosition)
-    {
-        vec3 indirectCoords = CalculateProbeSampleCoords(fragPosition);
-
-        #if (S_SCENE_PROBE_TYPE == 1)
-            indirectCoords.z /= 6;
-            // clamp(indirectCoords, g_vLightProbeVolumeLayer0TextureMin.xyz, g_vLightProbeVolumeLayer0TextureMax.xyz);
-        #elif (S_SCENE_PROBE_TYPE == 2)
-            indirectCoords.z /= 6;
-            indirectCoords = clamp(indirectCoords, g_vLightProbeVolumeBorderMin.xyz, g_vLightProbeVolumeBorderMax.xyz);
-
-            indirectCoords.z *= 6;
-            indirectCoords = fma(indirectCoords, g_vLightProbeVolumeAtlasScale.xyz, g_vLightProbeVolumeAtlasOffset.xyz);
-
-            indirectCoords.z /= 6;
-        #endif
-
-        return indirectCoords;
-    }
+    #include "lighting.lpv.glsl"
 #elif (D_BAKED_LIGHTING_FROM_VERTEX_STREAM == 1)
     in vec3 vPerVertexLightingOut;
 #endif
@@ -225,44 +166,36 @@ void CalculateDirectLighting(inout LightingTerms_t lighting, inout MaterialPrope
 
 #if (D_BAKED_LIGHTING_FROM_LIGHTMAP == 1)
 
-#define UseLightmapDirectionality 1
-
+#define UseLightmapDirectionality true
+const float g_flSceneDirectionalLightmapStrength = 0.8;
 uniform float g_flDirectionalLightmapStrength = 1.0;
 uniform float g_flDirectionalLightmapMinZ = 0.05;
-const vec4 g_vLightmapParams = vec4(0.0); // ???? directional non-intensity?? it's set to 0.0 in all places ive looked
 
 const float colorSpaceMul = 254 / 255;
 
 // I don't actually understand much of this, but it's Valve's code.
 vec3 ComputeLightmapShading(vec3 irradianceColor, vec4 irradianceDirection, vec3 normalMap)
 {
+    if (UseLightmapDirectionality)
+    {
+        vec3 vTangentSpaceLightVector;
 
-#if UseLightmapDirectionality == 1
-    vec3 vTangentSpaceLightVector;
+        vTangentSpaceLightVector.xy = UnpackFromColor(irradianceDirection.xy);
 
-    vTangentSpaceLightVector.xy = UnpackFromColor(irradianceDirection.xy);
+        float sinTheta = dot(vTangentSpaceLightVector.xy, vTangentSpaceLightVector.xy);
+        float cosTheta = sqrt(1.0 - sinTheta);
 
-    float sinTheta = dot(vTangentSpaceLightVector.xy, vTangentSpaceLightVector.xy);
+        vTangentSpaceLightVector *= (colorSpaceMul / max(colorSpaceMul, length(vTangentSpaceLightVector.xy)));
+        vTangentSpaceLightVector.z = cosTheta;
 
-#if S_LIGHTMAP_VERSION_MINOR == 1
-    // Error in HLA code, fixed in DeskJob
-    float cosTheta = 1.0 - sqrt(sinTheta);
-#else
-    vTangentSpaceLightVector *= (colorSpaceMul / max(colorSpaceMul, length(vTangentSpaceLightVector.xy)));
+        float flDirectionality = mix(irradianceDirection.z, 1.0, g_flDirectionalLightmapStrength) - g_flSceneDirectionalLightmapStrength;
+        vec3 vNonDirectionalLightmap = irradianceColor * saturate(flDirectionality);
 
-    float cosTheta = sqrt(1.0 - sinTheta);
-#endif
-    vTangentSpaceLightVector.z = cosTheta;
+        float NoL = ClampToPositive(dot(vTangentSpaceLightVector, normalMap));
+        float LightmapZ = max(vTangentSpaceLightVector.z, g_flDirectionalLightmapMinZ);
 
-    float flDirectionality = mix(irradianceDirection.z, 1.0, g_flDirectionalLightmapStrength);
-    vec3 vNonDirectionalLightmap = irradianceColor * saturate(flDirectionality + g_vLightmapParams.x);
-
-    float NoL = ClampToPositive(dot(vTangentSpaceLightVector, normalMap));
-
-    float LightmapZ = max(vTangentSpaceLightVector.z, g_flDirectionalLightmapMinZ);
-
-    irradianceColor = (NoL * (irradianceColor - vNonDirectionalLightmap) / LightmapZ) + vNonDirectionalLightmap;
-#endif
+        irradianceColor = (NoL * (irradianceColor - vNonDirectionalLightmap) / LightmapZ) + vNonDirectionalLightmap;
+    }
 
     return irradianceColor;
 }
@@ -288,26 +221,7 @@ void CalculateIndirectLighting(inout LightingTerms_t lighting, inout MaterialPro
     lighting.SpecularOcclusion = vAHDData.a;
 
 #elif (D_BAKED_LIGHTING_FROM_PROBE == 1)
-    vec3 vIndirectSampleCoords = CalculateProbeIndirectCoords(mat.PositionWS);
-
-    // Take up to 3 samples along the normal direction
-    vec3 vDepthSliceOffsets = mix(vec3(0, 1, 2) / 6.0, vec3(3, 4, 5) / 6.0, step(mat.AmbientNormal, vec3(0.0)));
-    vec3 vAmbient[3];
-
-    vec3 vNormalSquared = pow2(mat.AmbientNormal);
-
-    lighting.DiffuseIndirect = vec3(0.0);
-
-    for (int i = 0; i < 3; i++)
-    {
-        vAmbient[i] = textureLod(g_tLPV_Irradiance, vIndirectSampleCoords + vec3(0, 0, vDepthSliceOffsets[i]), 0.0).rgb;
-        lighting.DiffuseIndirect += vAmbient[i] * vNormalSquared[i];
-    }
-
-    // SteamVR Home lpv irradiance is RGBM Dxt5
-    #if (S_LIGHTMAP_VERSION_MINOR == 0)
-        lighting.DiffuseIndirect = pow2(lighting.DiffuseIndirect); // not bothering with RGBM
-    #endif
+    lighting.DiffuseIndirect = ComputeLightProbeShading(mat);
 
 #elif (D_BAKED_LIGHTING_FROM_VERTEX_STREAM == 1)
     lighting.DiffuseIndirect = vPerVertexLightingOut.rgb;
