@@ -1,9 +1,10 @@
 using System.Diagnostics;
+using GUI.Types.Renderer;
 using GUI.Utils;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
 
-namespace GUI.Types.Renderer
+namespace GUI.Types.GLViewers
 {
     class GLSmartPropViewer : GLSingleNodeViewer
     {
@@ -29,6 +30,7 @@ namespace GUI.Types.Renderer
                     case "CSmartPropElement_Model":
                         {
                             using var resource = GuiContext.LoadFileCompiled(child.GetStringProperty("m_sModelName"));
+                            Debug.Assert(resource != null);
                             var model = (Model?)resource.DataBlock;
                             Debug.Assert(model != null);
 
@@ -59,6 +61,7 @@ namespace GUI.Types.Renderer
                                 }
 
                                 using var resource = GuiContext.LoadFileCompiled(pickOneChild.GetStringProperty("m_sModelName"));
+                                Debug.Assert(resource != null);
                                 var model = (Model?)resource.DataBlock;
                                 Debug.Assert(model != null);
 

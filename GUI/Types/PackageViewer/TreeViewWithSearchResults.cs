@@ -227,9 +227,10 @@ namespace GUI.Types.PackageViewer
         /// <summary>
         /// Initializes the TreeView in the control with the contents of the passed Package. Contents are sorted and expanded by default.
         /// </summary>
-        internal void InitializeTreeViewFromPackage(VrfGuiContext vrfGuiContext)
+        internal void InitializeTreeViewFromPackage(VrfGuiContext vrfGuiContext, VirtualPackageNode rootVirtual)
         {
             mainListView.VrfGuiContext = vrfGuiContext;
+            mainTreeView.Root = rootVirtual;
 
             var control = mainTreeView;
             control.BeginUpdate();
@@ -252,17 +253,6 @@ namespace GUI.Types.PackageViewer
 
             var name = Path.GetFileName(vrfGuiContext.FileName);
             var vpkImage = MainForm.ImageListLookup["vpk"];
-
-            var rootVirtual = new VirtualPackageNode("root", 0, null);
-            mainTreeView.Root = rootVirtual;
-
-            foreach (var fileType in vrfGuiContext.CurrentPackage.Entries)
-            {
-                foreach (var file in fileType.Value)
-                {
-                    BetterTreeView.AddFileNode(rootVirtual, file);
-                }
-            }
 
             var root = new BetterTreeNode(name, rootVirtual)
             {
@@ -501,9 +491,9 @@ namespace GUI.Types.PackageViewer
                     var processed = 0;
 
                     // This does not need to be perfect, ValvePak reports a string per file, and success strings.
-                    var maximum = package.ArchiveMD5Entries.Count + 2;
+                    var maximum = package.AccessPackFileHashes.Count + 2;
 
-                    if (package.ArchiveMD5Entries.Count == 0)
+                    if (package.AccessPackFileHashes.Count == 0)
                     {
                         maximum += package.Entries.Sum(x => x.Value.Count);
                     }
@@ -547,7 +537,7 @@ namespace GUI.Types.PackageViewer
                         package.VerifyChunkHashes(progressReporter);
                     }
 
-                    if (!cancellationToken.IsCancellationRequested && package.ArchiveMD5Entries.Count == 0)
+                    if (!cancellationToken.IsCancellationRequested && package.AccessPackFileHashes.Count == 0)
                     {
                         package.VerifyFileChecksums(progressReporter);
                     }
@@ -569,9 +559,10 @@ namespace GUI.Types.PackageViewer
                 }
                 catch (Exception e)
                 {
+                    Log.Error(nameof(Package), $"Failed to verify package contents: {e.Message}");
+
                     if (cancellationToken.IsCancellationRequested)
                     {
-                        Log.Error(nameof(Package), $"Failed to verify package contents: {e.Message}");
                         return;
                     }
 
@@ -696,9 +687,11 @@ namespace GUI.Types.PackageViewer
                     // Walk up the directories in the file path to collect all the virtual nodes
                     if (!string.IsNullOrWhiteSpace(item.PackageEntry.DirectoryName))
                     {
-                        foreach (var subPathSpan in item.PackageEntry.DirectoryName.AsSpan().Split([Package.DirectorySeparatorChar]))
+                        var directoryName = item.PackageEntry.DirectoryName.AsSpan();
+
+                        foreach (var subPathRange in directoryName.Split([Package.DirectorySeparatorChar]))
                         {
-                            var subPath = subPathSpan.ToString();
+                            var subPath = directoryName[subPathRange].ToString();
 
                             if (!pkgNode.Folders.TryGetValue(subPath, out var subNode))
                             {
@@ -843,7 +836,7 @@ namespace GUI.Types.PackageViewer
         {
             mainListView.Visible = false;
 
-            var tabs = new ThemedTabControl
+            var tabs = new TabControl
             {
                 ImageList = MainForm.ImageList,
                 Dock = DockStyle.Fill
@@ -917,12 +910,11 @@ namespace GUI.Types.PackageViewer
             var inputPath = searchTextBox.Text
                 .Replace(Path.DirectorySeparatorChar, Package.DirectorySeparatorChar)
                 .AsSpan()
-                .Trim(Package.DirectorySeparatorChar)
-                .Split([Package.DirectorySeparatorChar]);
+                .Trim(Package.DirectorySeparatorChar);
 
-            foreach (var segment in inputPath)
+            foreach (var segmentRange in inputPath.Split([Package.DirectorySeparatorChar]))
             {
-                var name = segment.ToString();
+                var name = inputPath[segmentRange].ToString();
 
                 if (node.Folders.TryGetValue(name, out var nextNode))
                 {

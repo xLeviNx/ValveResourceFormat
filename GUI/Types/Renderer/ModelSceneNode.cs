@@ -11,9 +11,9 @@ using ValveResourceFormat.Serialization.KeyValues;
 
 namespace GUI.Types.Renderer
 {
-    class ModelSceneNode : SceneNode, IRenderableMeshCollection
+    class ModelSceneNode : MeshCollectionNode
     {
-        public Vector4 Tint
+        public override Vector4 Tint
         {
             get
             {
@@ -34,7 +34,6 @@ namespace GUI.Types.Renderer
         }
 
         public readonly AnimationController AnimationController;
-        public List<RenderableMesh> RenderableMeshes { get; private set; } = [];
         public string ActiveMaterialGroup => activeMaterialGroup.Name;
         public bool HasMeshes => meshRenderers.Count > 0;
 
@@ -283,7 +282,7 @@ namespace GUI.Types.Renderer
         {
             animations.AddRange(embededAnimationsOnly
                 ? model.GetEmbeddedAnimations()
-                : model.GetAllAnimations(Scene.GuiContext.FileLoader)
+                : model.GetAllAnimations(Scene.GuiContext)
             );
 
             if (animations.Count != 0)
@@ -297,7 +296,7 @@ namespace GUI.Types.Renderer
             // Get embedded meshes
             foreach (var embeddedMesh in model.GetEmbeddedMeshesAndLoD().Where(m => (m.LoDMask & 1) != 0))
             {
-                embeddedMesh.Mesh.LoadExternalMorphData(Scene.GuiContext.FileLoader);
+                embeddedMesh.Mesh.LoadExternalMorphData(Scene.GuiContext);
                 model.SetExternalMorphData(embeddedMesh.Mesh.MorphData);
 
                 meshRenderers.Add(new RenderableMesh(embeddedMesh.Mesh, embeddedMesh.MeshIndex, Scene, model, materialTable, embeddedMesh.Mesh.MorphData));
@@ -313,7 +312,7 @@ namespace GUI.Types.Renderer
                 }
 
                 var mesh = (Mesh)newResource.DataBlock;
-                mesh.LoadExternalMorphData(Scene.GuiContext.FileLoader);
+                mesh.LoadExternalMorphData(Scene.GuiContext);
                 model.SetExternalMeshData(mesh);
 
                 meshRenderers.Add(new RenderableMesh(mesh, refMesh.MeshIndex, Scene, model, materialTable));

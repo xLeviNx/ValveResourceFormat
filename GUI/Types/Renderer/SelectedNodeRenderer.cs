@@ -7,7 +7,6 @@ namespace GUI.Types.Renderer
 {
     class SelectedNodeRenderer
     {
-        private readonly GLSceneViewer viewer;
         private readonly Shader shader;
         private readonly int vaoHandle;
         private readonly int vboHandle;
@@ -21,10 +20,9 @@ namespace GUI.Types.Renderer
         private readonly Vector2 SelectedNodeNameOffset = new(0, -20);
         public string ScreenDebugText { get; set; } = string.Empty;
 
-        public SelectedNodeRenderer(GLSceneViewer viewer)
+        public SelectedNodeRenderer(VrfGuiContext context)
         {
-            this.viewer = viewer;
-            shader = viewer.GuiContext.ShaderLoader.LoadShader("vrf.default");
+            shader = context.ShaderLoader.LoadShader("vrf.default");
 
             GL.CreateVertexArrays(1, out vaoHandle);
             GL.CreateBuffers(1, out vboHandle);
@@ -45,6 +43,16 @@ namespace GUI.Types.Renderer
             {
                 selectedNodes.RemoveAt(selectedNode);
                 node.IsSelected = false;
+
+                if (node.LightProbeBinding is { } probe)
+                {
+                    var probeStillInUse = selectedNodes.Any(n => n.LightProbeBinding == probe);
+
+                    if (!probeStillInUse)
+                    {
+                        probe.RemoveDebugGridSpheres();
+                    }
+                }
             }
             else
             {
@@ -55,12 +63,13 @@ namespace GUI.Types.Renderer
 
         public void SelectNode(SceneNode? node, bool forceDisableDepth = false)
         {
-            selectedNodes.ForEach(n => n.IsSelected = false);
+            RemoveAllLightProbeDebugGrid();
+
+            selectedNodes.ForEach(static n => n.IsSelected = false);
             selectedNodes.Clear();
 
             if (node == null)
             {
-                RemoveLightProbeDebugGrid();
                 vertexCount = 0;
                 return;
             }
@@ -82,7 +91,28 @@ namespace GUI.Types.Renderer
             }
         }
 
-        private void AddBox(List<SimpleVertex> vertices, in Matrix4x4 transform, in AABB box, Color32 color, bool showSize = false)
+        private static int ClosestVertexInView(Camera camera, ReadOnlySpan<Vector3> vertices)
+        {
+            var minDistance = float.MaxValue;
+            var closestIndex = -1;
+
+            for (var i = 0; i < vertices.Length; i++)
+            {
+                if (camera.ViewFrustum.Intersects(vertices[i]))
+                {
+                    var distance = Vector3.DistanceSquared(vertices[i], camera.Location);
+                    if (distance < minDistance)
+                    {
+                        minDistance = distance;
+                        closestIndex = i;
+                    }
+                }
+            }
+
+            return closestIndex;
+        }
+
+        private static void AddBox(Camera camera, TextRenderer textRenderer, List<SimpleVertex> vertices, in Matrix4x4 transform, in AABB box, Color32 color, bool showSize = false)
         {
             // Adding a box will add many vertices, so ensure the required capacity for it up front
             vertices.EnsureCapacity(vertices.Count + 2 * 12);
@@ -106,28 +136,7 @@ namespace GUI.Types.Renderer
                 (0, 4), (1, 5), (2, 6), (3, 7), // Vertical edges
             ];
 
-            int ClosestVertexInView(ReadOnlySpan<Vector3> vertices)
-            {
-                var minDistance = float.MaxValue;
-                var closestIndex = -1;
-
-                for (var i = 0; i < vertices.Length; i++)
-                {
-                    if (viewer.Camera.ViewFrustum.Intersects(vertices[i]))
-                    {
-                        var distance = Vector3.DistanceSquared(vertices[i], viewer.Camera.Location);
-                        if (distance < minDistance)
-                        {
-                            minDistance = distance;
-                            closestIndex = i;
-                        }
-                    }
-                }
-
-                return closestIndex;
-            }
-
-            var closestIndex = showSize ? ClosestVertexInView(c) : -1;
+            var closestIndex = showSize ? ClosestVertexInView(camera, c) : -1;
 
             for (var i = 0; i < Lines.Length; i++)
             {
@@ -148,7 +157,7 @@ namespace GUI.Types.Renderer
                     var (v0, v1) = (c[line.Start], c[line.End]);
                     var length = Vector3.Distance(v0, v1);
 
-                    viewer.TextRenderer.AddTextBillboard(Vector3.Lerp(v0, v1, 0.5f), new TextRenderer.TextRenderRequest
+                    textRenderer.AddTextBillboard(Vector3.Lerp(v0, v1, 0.5f), new TextRenderer.TextRenderRequest
                     {
                         Scale = 13f,
                         Color = axisColor,
@@ -165,7 +174,7 @@ namespace GUI.Types.Renderer
             }
         }
 
-        public void Update()
+        public void Update(Scene.RenderContext renderContext, Scene.UpdateContext updateContext)
         {
             disableDepth = selectedNodes.Count > 1;
 
@@ -182,16 +191,16 @@ namespace GUI.Types.Renderer
 
                 if (node is not SimpleBoxSceneNode and not SpriteSceneNode)
                 {
-                    AddBox(vertices, node.Transform, node.LocalBoundingBox, Color32.White, showSize: true);
+                    AddBox(renderContext.Camera, updateContext.TextRenderer, vertices, node.Transform, node.LocalBoundingBox, Color32.White, showSize: true);
                 }
 
                 if (debugCubeMaps)
                 {
-                    var tiedEnvmaps = viewer.Scene.LightingInfo.CubemapType switch
+                    var tiedEnvmaps = renderContext.Scene.LightingInfo.CubemapType switch
                     {
                         Scene.CubemapType.CubemapArray => node.ShaderEnvMapVisibility
                             .GetVisibleShaderIndices()
-                            .Select(shaderId => viewer.Scene.LightingInfo.EnvMaps.FirstOrDefault(env => env.ShaderIndex == shaderId))
+                            .Select(shaderId => renderContext.Scene.LightingInfo.EnvMaps.FirstOrDefault(env => env.ShaderIndex == shaderId))
                             .OfType<SceneEnvMap>(),
                         _ => node.EnvMaps
                     };
@@ -200,9 +209,9 @@ namespace GUI.Types.Renderer
 
                     foreach (var tiedEnvMap in tiedEnvmaps)
                     {
-                        AddBox(vertices, tiedEnvMap.Transform, tiedEnvMap.LocalBoundingBox, new(0.7f, 0.0f, 1.0f, 1.0f));
+                        AddBox(renderContext.Camera, updateContext.TextRenderer, vertices, tiedEnvMap.Transform, tiedEnvMap.LocalBoundingBox, new(0.7f, 0.0f, 1.0f, 1.0f));
 
-                        if (viewer.Scene.LightingInfo.CubemapType is Scene.CubemapType.IndividualCubemaps && i == 0)
+                        if (renderContext.Scene.LightingInfo.CubemapType is Scene.CubemapType.IndividualCubemaps && i == 0)
                         {
                             ShapeSceneNode.AddLine(vertices, tiedEnvMap.Transform.Translation, node.BoundingBox.Center, new(0.0f, 1.0f, 0.0f, 1.0f));
                             i++;
@@ -218,14 +227,10 @@ namespace GUI.Types.Renderer
 
                 if (debugLightProbes && node.LightProbeBinding is not null)
                 {
-                    AddBox(vertices, node.LightProbeBinding.Transform, node.LightProbeBinding.LocalBoundingBox, new(1.0f, 0.0f, 1.0f, 1.0f));
+                    AddBox(renderContext.Camera, updateContext.TextRenderer, vertices, node.LightProbeBinding.Transform, node.LightProbeBinding.LocalBoundingBox, new(1.0f, 0.0f, 1.0f, 1.0f));
                     ShapeSceneNode.AddLine(vertices, node.LightProbeBinding.Transform.Translation, node.BoundingBox.Center, new(1.0f, 0.0f, 1.0f, 1.0f));
 
-                    if (!viewer.Scene.IsSkyboxMap)
-                    {
-                        RemoveLightProbeDebugGrid();
-                        node.LightProbeBinding.CrateDebugGridSpheres();
-                    }
+                    node.LightProbeBinding.CrateDebugGridSpheres();
                 }
 
                 if (node.EntityData != null)
@@ -250,7 +255,7 @@ namespace GUI.Types.Renderer
                             );
                         }
 
-                        AddBox(vertices, node.Transform, bounds, new(0.0f, 1.0f, 0.0f, 1.0f));
+                        AddBox(renderContext.Camera, updateContext.TextRenderer, vertices, node.Transform, bounds, new(0.0f, 1.0f, 0.0f, 1.0f));
 
                         disableDepth = true;
                     }
@@ -264,7 +269,7 @@ namespace GUI.Types.Renderer
                         var origin = EntityTransformHelper.ParseVector(node.EntityData.GetProperty<string>("precomputedobbextent"));
                         var extent = EntityTransformHelper.ParseVector(node.EntityData.GetProperty<string>("precomputedobborigin"));
 
-                        AddBox(vertices, Matrix4x4.Identity, bounds, new(0.0f, 1.0f, 0.0f, 1.0f));
+                        AddBox(renderContext.Camera, updateContext.TextRenderer, vertices, Matrix4x4.Identity, bounds, new(0.0f, 1.0f, 0.0f, 1.0f));
 
                         ShapeSceneNode.AddLine(vertices, node.Transform.Translation, origin, new(0.0f, 0.0f, 1.0f, 1.0f));
                         ShapeSceneNode.AddLine(vertices, node.Transform.Translation, extent, new(1.0f, 1.0f, 0.0f, 1.0f));
@@ -277,7 +282,7 @@ namespace GUI.Types.Renderer
                 var position = node.BoundingBox.Center;
                 position.Z = node.BoundingBox.Max.Z;
 
-                viewer.TextRenderer.AddTextBillboard(position, new TextRenderer.TextRenderRequest
+                updateContext.TextRenderer.AddTextBillboard(position, new TextRenderer.TextRenderRequest
                 {
                     Scale = 20f,
                     Text = nodeName,
@@ -288,7 +293,7 @@ namespace GUI.Types.Renderer
 
             if (ScreenDebugText.Length > 0)
             {
-                viewer.TextRenderer.AddTextRelative(new TextRenderer.TextRenderRequest
+                updateContext.TextRenderer.AddTextRelative(new TextRenderer.TextRenderRequest
                 {
                     X = 0.005f,
                     Y = 0.03f,
@@ -304,9 +309,12 @@ namespace GUI.Types.Renderer
             vertices.Clear();
         }
 
-        private void RemoveLightProbeDebugGrid()
+        private void RemoveAllLightProbeDebugGrid()
         {
-            viewer.Scene.LightingInfo.LightProbes.ForEach(static probe => probe.RemoveDebugGridSpheres());
+            foreach (var node in selectedNodes)
+            {
+                node.LightProbeBinding?.RemoveDebugGridSpheres();
+            }
         }
 
         public void Render()
@@ -343,7 +351,10 @@ namespace GUI.Types.Renderer
             debugCubeMaps = mode == "Cubemaps";
             debugLightProbes = mode is "Irradiance" or "Illumination";
 
-            RemoveLightProbeDebugGrid();
+            if (!debugLightProbes)
+            {
+                RemoveAllLightProbeDebugGrid();
+            }
         }
     }
 }

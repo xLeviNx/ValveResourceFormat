@@ -5,6 +5,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using GUI.Utils;
 using OpenTK.Graphics.OpenGL;
+using SkiaSharp;
 using ValveResourceFormat;
 using ValveResourceFormat.ResourceTypes;
 using VrfMaterial = ValveResourceFormat.ResourceTypes.Material;
@@ -39,7 +40,7 @@ namespace GUI.Types.Renderer
 
         private static readonly byte[] NewLineArray = "\n"u8.ToArray();
 
-        public RenderMaterial GetMaterial(string name, Dictionary<string, byte>? shaderArguments)
+        public RenderMaterial GetMaterial(string? name, Dictionary<string, byte>? shaderArguments)
         {
             // HL:VR has a world node that has a draw call with no material
             if (name == null)
@@ -79,7 +80,7 @@ namespace GUI.Types.Renderer
             return mat;
         }
 
-        public RenderMaterial LoadMaterial(Resource resource, Dictionary<string, byte>? shaderArguments = null)
+        public RenderMaterial LoadMaterial(Resource? resource, Dictionary<string, byte>? shaderArguments = null)
         {
             if (resource == null)
             {
@@ -177,7 +178,7 @@ namespace GUI.Types.Renderer
             if (data.IsRawAnyImage)
             {
                 using var bitmap = data.GenerateBitmap();
-                return GLTextureViewer.LoadBitmapTexture(bitmap);
+                return LoadBitmapTexture(bitmap);
             }
 
             var target = TextureTarget.Texture2D;
@@ -380,6 +381,19 @@ namespace GUI.Types.Renderer
         private static RenderTexture CreateSolidTexture(byte r, byte g, byte b) => GenerateColorTexture(1, 1, [r, g, b]);
         public RenderTexture GetDefaultNormal() => DefaultNormal ??= CreateSolidTexture(127, 127, 255);
         public RenderTexture GetDefaultMask() => DefaultMask ??= CreateSolidTexture(255, 255, 255);
+
+        public static RenderTexture LoadBitmapTexture(SKBitmap bitmap)
+        {
+            var texture = new RenderTexture(TextureTarget.Texture2D, bitmap.Width, bitmap.Height, 1, 1);
+
+            var isHdr = bitmap.ColorType == Texture.HdrBitmapColorType;
+            var store = GLTextureDecoder.GetImageExportFormat(isHdr);
+
+            GL.TextureStorage2D(texture.Handle, 1, store.SizedInternalFormat, texture.Width, texture.Height);
+            GL.TextureSubImage2D(texture.Handle, 0, 0, 0, texture.Width, texture.Height, store.PixelFormat, store.PixelType, bitmap.GetPixels());
+
+            return texture;
+        }
 
         private static RenderTexture GenerateColorTexture(int width, int height, byte[] color)
         {

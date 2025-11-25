@@ -3,6 +3,7 @@ using System.IO;
 using System.IO.Enumeration;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using GUI.Types.Viewers;
 using GUI.Utils;
@@ -16,11 +17,11 @@ using ValveResourceFormat.IO;
 namespace GUI.Types.PackageViewer
 {
 #pragma warning disable CA1001 // TreeView is not owned by this class, set to null in VPK_Disposed
-    class PackageViewer : IViewer
+    class PackageViewer(VrfGuiContext vrfGuiContext) : IViewer
 #pragma warning restore CA1001
     {
-        private VrfGuiContext VrfGuiContext;
         private TreeViewWithSearchResults TreeView;
+        private VirtualPackageNode VirtualRoot;
         private BetterTreeNode LastContextTreeNode;
         private bool IsEditingPackage; // TODO: Allow editing existing vpks (but not chunked ones)
 
@@ -29,9 +30,8 @@ namespace GUI.Types.PackageViewer
             return magic == SteamDatabase.ValvePak.Package.MAGIC;
         }
 
-        public Control CreateEmpty(VrfGuiContext vrfGuiContext)
+        public Control CreateEmpty()
         {
-            VrfGuiContext = vrfGuiContext;
             IsEditingPackage = true;
 
             var package = new Package();
@@ -39,16 +39,14 @@ namespace GUI.Types.PackageViewer
 
             vrfGuiContext.CurrentPackage = package;
 
+            VirtualRoot = new VirtualPackageNode("root", 0, null);
             CreateTreeViewWithSearchResults();
 
             return TreeView;
         }
 
-        public TabPage Create(VrfGuiContext vrfGuiContext, Stream stream)
+        public async Task LoadAsync(Stream stream)
         {
-            VrfGuiContext = vrfGuiContext;
-
-            var tab = new TabPage();
             var package = new Package();
             package.OptimizeEntriesForBinarySearch(StringComparison.OrdinalIgnoreCase);
 
@@ -64,6 +62,21 @@ namespace GUI.Types.PackageViewer
 
             vrfGuiContext.CurrentPackage = package;
 
+            VirtualRoot = new VirtualPackageNode("root", 0, null);
+
+            foreach (var fileType in vrfGuiContext.CurrentPackage.Entries)
+            {
+                foreach (var file in fileType.Value)
+                {
+                    BetterTreeView.AddFileNode(VirtualRoot, file);
+                }
+            }
+        }
+
+        public TabPage Create()
+        {
+            var tab = new TabPage();
+
             CreateTreeViewWithSearchResults();
             tab.Controls.Add(TreeView);
 
@@ -74,7 +87,7 @@ namespace GUI.Types.PackageViewer
         {
             // create a TreeView with search capabilities, register its events, and add it to the tab
             TreeView = new TreeViewWithSearchResults(this);
-            TreeView.InitializeTreeViewFromPackage(VrfGuiContext);
+            TreeView.InitializeTreeViewFromPackage(vrfGuiContext, VirtualRoot);
             TreeView.OpenPackageEntry += VPK_OpenFile;
             TreeView.OpenContextMenu += VPK_OnContextMenu;
             TreeView.PreviewFile += VPK_PreviewFile;
@@ -135,7 +148,7 @@ namespace GUI.Types.PackageViewer
                     name = Path.Join(prefix, name);
                 }
 
-                var entry = VrfGuiContext.CurrentPackage.AddFile(name, data);
+                var entry = vrfGuiContext.CurrentPackage.AddFile(name, data);
                 TreeView.AddFileNode(entry);
 
                 if (data.Length >= 6)
@@ -164,7 +177,7 @@ namespace GUI.Types.PackageViewer
 #if DEBUG
                 while (resourceEntries.TryDequeue(out var entry))
                 {
-                    VrfGuiContext.CurrentPackage.ReadEntry(entry.Entry, out var output, false);
+                    vrfGuiContext.CurrentPackage.ReadEntry(entry.Entry, out var output, false);
                     using var entryStream = new MemoryStream(output);
 
                     using var resource = new ValveResourceFormat.Resource();
@@ -229,7 +242,7 @@ namespace GUI.Types.PackageViewer
             if (node.PackageEntry != null)
             {
                 ((BetterTreeNode)node.Parent).PkgNode.Files.Remove(node.PackageEntry);
-                VrfGuiContext.CurrentPackage.RemoveFile(node.PackageEntry);
+                vrfGuiContext.CurrentPackage.RemoveFile(node.PackageEntry);
             }
 
             if (node.Level > 0)
@@ -240,12 +253,12 @@ namespace GUI.Types.PackageViewer
 
         public void SaveToFile(string fileName)
         {
-            VrfGuiContext.CurrentPackage.Write(fileName);
+            vrfGuiContext.CurrentPackage.Write(fileName);
 
             var fileCount = 0;
             var fileSize = 0u;
 
-            foreach (var fileType in VrfGuiContext.CurrentPackage.Entries)
+            foreach (var fileType in vrfGuiContext.CurrentPackage.Entries)
             {
                 foreach (var file in fileType.Value)
                 {
@@ -524,8 +537,8 @@ namespace GUI.Types.PackageViewer
         /// <param name="e">Event data.</param>
         private void VPK_OpenFile(object sender, PackageEntry entry)
         {
-            var vrfGuiContext = new VrfGuiContext(entry.GetFullPath(), VrfGuiContext);
-            Program.MainForm.OpenFile(vrfGuiContext, entry);
+            var newVrfGuiContext = new VrfGuiContext(entry.GetFullPath(), vrfGuiContext);
+            Program.MainForm.OpenFile(newVrfGuiContext, entry);
         }
 
         private void VPK_PreviewFile(object sender, PackageEntry entry)
@@ -543,8 +556,8 @@ namespace GUI.Types.PackageViewer
                 return;
             }
 
-            var vrfGuiContext = new VrfGuiContext(entry.GetFullPath(), VrfGuiContext);
-            Program.MainForm.OpenFile(vrfGuiContext, entry, TreeView);
+            var newVrfGuiContext = new VrfGuiContext(entry.GetFullPath(), vrfGuiContext);
+            Program.MainForm.OpenFile(newVrfGuiContext, entry, TreeView);
         }
 
         private string GetCurrentPrefix()

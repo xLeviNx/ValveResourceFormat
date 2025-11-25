@@ -42,7 +42,7 @@ namespace GUI.Types.Viewers
             EntityViewerGrid.MultiSelect = true;
             
             EntityInfo.OutputsGrid.CellDoubleClick += EntityInfoGrid_CellDoubleClick;
-            EntityInfo.ResourceAddDataGridExternalRef(guiContext.FileLoader);
+            EntityInfo.ResourceAddDataGridExternalRef(guiContext);
 
             // Add export button
             AddExportButton();

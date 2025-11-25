@@ -107,13 +107,7 @@ namespace GUI
             Settings.Load();
             consoleTab.InitializeFont();
 
-#pragma warning disable WFO5001
             Application.SetColorMode(Settings.GetSystemColor());
-
-            if (Application.IsDarkModeEnabled)
-            {
-                Log.Warn(nameof(Application), "Dark mode is EXPERIMENTAL. Some controls may have less than ideal colors which will be improved in a future .NET update.");
-            }
 
             HardwareAcceleratedTextureDecoder.Decoder = new GLTextureDecoder();
 
@@ -134,7 +128,20 @@ namespace GUI
             {
                 OpenWelcome();
             }
-            else if (args.Length == 0 && Settings.Config.OpenExplorerOnStart != 0)
+            else
+
+            if (args.Length > 0)
+            {
+                void OnHandleCreated(object sender, EventArgs e)
+                {
+                    HandleCreated -= OnHandleCreated;
+
+                    OpenCommandLineArgFiles(args);
+                }
+
+                HandleCreated += OnHandleCreated;
+            }
+            else if (Settings.Config.OpenExplorerOnStart != 0)
             {
                 OpenExplorer();
             }
@@ -395,7 +402,7 @@ namespace GUI
             var tab = mainTabs.SelectedTab;
             if (tab is not null && tab.Tag is ExportData exportData)
             {
-                var (newFileContext, packageEntry) = exportData.VrfGuiContext.FileLoader.FindFileWithContext(
+                var (newFileContext, packageEntry) = exportData.VrfGuiContext.FindFileWithContext(
                     exportData.PackageEntry?.GetFullPath() ?? exportData.VrfGuiContext.FileName
                 );
                 OpenFile(newFileContext, packageEntry);
@@ -671,10 +678,9 @@ namespace GUI
                     tab.ImageIndex = GetImageIndexForExtension(extension);
                 }
 
-                mainTabs.TabPages.Insert(mainTabs.SelectedIndex + 1, tab);
-
                 if (!isPreview)
                 {
+                    mainTabs.TabPages.Insert(mainTabs.SelectedIndex + 1, tab);
                     mainTabs.SelectTab(tab);
                 }
 
@@ -685,19 +691,25 @@ namespace GUI
                 tabTemp?.Dispose();
             }
 
-            var loadingFile = new LoadingFile();
-            tab.Controls.Add(loadingFile);
+            Control loadingFile = null;
 
-            var task = Task.Factory.StartNew(() => ProcessFile(vrfGuiContext, file, viewMode));
+            if (!isPreview)
+            {
+                loadingFile = new LoadingFile();
+                tab.Controls.Add(loadingFile);
+            }
 
-            task.ContinueWith(
+            var currentContext = TaskScheduler.FromCurrentSynchronizationContext();
+            var taskLoad = ProcessFile(vrfGuiContext, file, viewMode);
+
+            taskLoad.ContinueWith(
                 t =>
                 {
                     vrfGuiContext.GLPostLoadAction = null;
 
                     t.Exception?.Flatten().Handle(ex =>
                     {
-                        var control = CodeTextBox.CreateFromException(ex);
+                        var control = CodeTextBox.CreateFromException(ex, tab.ToolTipText);
 
                         tab.Controls.Add(control);
 
@@ -706,46 +718,84 @@ namespace GUI
                 },
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted,
-                TaskScheduler.FromCurrentSynchronizationContext());
+                currentContext);
 
-            task.ContinueWith(
+            var task = taskLoad.ContinueWith(
                 t =>
                 {
                     Cursor.Current = Cursors.WaitCursor;
 
-                    tab.SuspendLayout();
-
                     try
                     {
-                        foreach (Control c in t.Result.Controls)
-                        {
-                            if (tab.IsDisposed || tab.Disposing)
-                            {
-                                c.Dispose();
-                                continue;
-                            }
+                        var viewer = t.Result;
+                        var temporaryTab = viewer.Create();
 
-                            tab.Controls.Add(c);
+                        tab.SuspendLayout();
+
+                        try
+                        {
+                            foreach (Control c in temporaryTab.Controls)
+                            {
+                                if (tab.IsDisposed || tab.Disposing)
+                                {
+                                    c.Dispose();
+                                    continue;
+                                }
+
+                                tab.Controls.Add(c);
+                            }
+                        }
+                        finally
+                        {
+                            temporaryTab.Dispose(); // Dispose the temporary TabPage since we copied the controls over
+                            tab.ResumeLayout();
                         }
                     }
                     finally
                     {
-                        tab.ResumeLayout();
+                        Cursor.Current = Cursors.Default;
                     }
 
                     ShowHideSearch();
-
-                    Cursor.Current = Cursors.Default;
                 },
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnRanToCompletion,
-                TaskScheduler.FromCurrentSynchronizationContext());
+                currentContext);
+
+            task.ContinueWith(
+                t =>
+                {
+                    vrfGuiContext.GLPostLoadAction = null;
+
+                    t.Exception?.Flatten().Handle(ex =>
+                    {
+                        try
+                        {
+                            var control = CodeTextBox.CreateFromException(ex, tab.ToolTipText);
+
+                            tab.Controls.Add(control);
+
+                            Log.Error(nameof(MainForm), ex.ToString());
+
+                            return false;
+                        }
+                        catch (Exception e)
+                        {
+                            Program.ShowError(e);
+
+                            return true;
+                        }
+                    });
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                currentContext);
 
             task.ContinueWith(t =>
                 {
-                    tab.BeginInvoke(() =>
+                    BeginInvoke(() =>
                     {
-                        loadingFile.Dispose();
+                        loadingFile?.Dispose();
 
                         if (isPreview)
                         {
@@ -755,17 +805,19 @@ namespace GUI
                 },
                 CancellationToken.None,
                 TaskContinuationOptions.None,
-                TaskScheduler.FromCurrentSynchronizationContext());
+                currentContext);
         }
 
-        private static TabPage ProcessFile(VrfGuiContext vrfGuiContext, PackageEntry entry, ResourceViewMode viewMode)
+        private static async Task<Types.Viewers.IViewer> ProcessFile(VrfGuiContext vrfGuiContext, PackageEntry entry, ResourceViewMode viewMode)
         {
+            await Task.Yield();
+
             Stream stream = null;
             Span<byte> magicData = stackalloc byte[6];
 
             if (entry != null)
             {
-                stream = AdvancedGuiFileLoader.GetPackageEntryStream(vrfGuiContext.ParentGuiContext.CurrentPackage, entry);
+                stream = GameFileLoader.GetPackageEntryStream(vrfGuiContext.ParentGuiContext.CurrentPackage, entry);
 
                 if (stream.Length >= magicData.Length)
                 {
@@ -788,78 +840,95 @@ namespace GUI
 
             if (Types.PackageViewer.PackageViewer.IsAccepted(magic))
             {
-                var tab = new PackageViewer().Create(vrfGuiContext, stream);
-
-                return tab;
+                var viewer = new PackageViewer(vrfGuiContext);
+                await viewer.LoadAsync(stream).ConfigureAwait(false);
+                return viewer;
             }
             else if (Types.Viewers.CompiledShader.IsAccepted(magic))
             {
-                var viewer = new Types.Viewers.CompiledShader();
-
-                try
-                {
-                    var tab = viewer.Create(vrfGuiContext, stream);
-                    viewer = null;
-                    return tab;
-                }
-                finally
-                {
-                    viewer?.Dispose();
-                }
+                var viewer = new Types.Viewers.CompiledShader(vrfGuiContext);
+                await viewer.LoadAsync(stream).ConfigureAwait(false);
+                return viewer;
             }
             else if (Types.Viewers.ClosedCaptions.IsAccepted(magic))
             {
-                return new Types.Viewers.ClosedCaptions().Create(vrfGuiContext, stream);
+                var viewer = new Types.Viewers.ClosedCaptions(vrfGuiContext);
+                await viewer.LoadAsync(stream).ConfigureAwait(false);
+                return viewer;
             }
             else if (Types.Viewers.ToolsAssetInfo.IsAccepted(magic))
             {
-                return new Types.Viewers.ToolsAssetInfo().Create(vrfGuiContext, stream);
+                var viewer = new Types.Viewers.ToolsAssetInfo(vrfGuiContext);
+                await viewer.LoadAsync(stream).ConfigureAwait(false);
+                return viewer;
             }
             else if (Types.Viewers.FlexSceneFile.IsAccepted(magic))
             {
-                return new Types.Viewers.FlexSceneFile().Create(vrfGuiContext, stream);
+                var viewer = new Types.Viewers.FlexSceneFile(vrfGuiContext);
+                await viewer.LoadAsync(stream).ConfigureAwait(false);
+                return viewer;
             }
             else if (Types.Viewers.NavView.IsAccepted(magic))
             {
-                return new Types.Viewers.NavView().Create(vrfGuiContext, stream);
+                var viewer = new Types.Viewers.NavView(vrfGuiContext);
+                await viewer.LoadAsync(stream).ConfigureAwait(false);
+                return viewer;
             }
             else if (Types.Viewers.BinaryKeyValues3.IsAccepted(magic))
             {
-                return new Types.Viewers.BinaryKeyValues3().Create(vrfGuiContext, stream);
+                var viewer = new Types.Viewers.BinaryKeyValues3(vrfGuiContext);
+                await viewer.LoadAsync(stream).ConfigureAwait(false);
+                return viewer;
             }
             else if (Types.Viewers.BinaryKeyValues2.IsAccepted(magic, vrfGuiContext.FileName))
             {
-                return new Types.Viewers.BinaryKeyValues2().Create(vrfGuiContext, stream);
+                var viewer = new Types.Viewers.BinaryKeyValues2(vrfGuiContext);
+                await viewer.LoadAsync(stream).ConfigureAwait(false);
+                return viewer;
             }
             else if (Types.Viewers.BinaryKeyValues1.IsAccepted(magic))
             {
-                return new Types.Viewers.BinaryKeyValues1().Create(vrfGuiContext, stream);
+                var viewer = new Types.Viewers.BinaryKeyValues1(vrfGuiContext);
+                await viewer.LoadAsync(stream).ConfigureAwait(false);
+                return viewer;
             }
             else if (Types.Viewers.Resource.IsAccepted(magicResourceVersion))
             {
-                return new Types.Viewers.Resource().Create(vrfGuiContext, stream, viewMode, verifyFileSize: entry == null || entry.CRC32 > 0);
+                var viewer = new Types.Viewers.Resource(vrfGuiContext, viewMode, verifyFileSize: entry == null || entry.CRC32 > 0);
+                await viewer.LoadAsync(stream).ConfigureAwait(false);
+                return viewer;
             }
             // Raw images and audio files do not really appear in Source 2 projects, but we support viewing them anyway.
             // As some detections rely on the file extension instead of magic bytes,
             // they should be detected at the bottom here, after failing to detect a proper resource file.
             else if (Types.Viewers.Image.IsAccepted(magic))
             {
-                return new Types.Viewers.Image().Create(vrfGuiContext, stream);
+                var viewer = new Types.Viewers.Image(vrfGuiContext);
+                await viewer.LoadAsync(stream).ConfigureAwait(false);
+                return viewer;
             }
-            else if (Types.Viewers.Image.IsAcceptedVector(vrfGuiContext.FileName))
+            else if (Types.Viewers.ImageVector.IsAccepted(vrfGuiContext.FileName))
             {
-                return new Types.Viewers.Image().CreateVector(vrfGuiContext, stream);
+                var viewer = new Types.Viewers.ImageVector(vrfGuiContext);
+                await viewer.LoadAsync(stream).ConfigureAwait(false);
+                return viewer;
             }
             else if (Types.Viewers.Audio.IsAccepted(magic, vrfGuiContext.FileName))
             {
-                return new Types.Viewers.Audio().Create(vrfGuiContext, stream, viewMode == ResourceViewMode.ViewerOnly);
+                var viewer = new Types.Viewers.Audio(vrfGuiContext, viewMode == ResourceViewMode.ViewerOnly);
+                await viewer.LoadAsync(stream).ConfigureAwait(false);
+                return viewer;
             }
             else if (Types.Viewers.GridNavFile.IsAccepted(magic))
             {
-                return new Types.Viewers.GridNavFile().Create(vrfGuiContext, stream);
+                var viewer = new Types.Viewers.GridNavFile(vrfGuiContext);
+                await viewer.LoadAsync(stream).ConfigureAwait(false);
+                return viewer;
             }
 
-            return new Types.Viewers.ByteViewer().Create(vrfGuiContext, stream);
+            var byteViewer = new Types.Viewers.ByteViewer(vrfGuiContext);
+            await byteViewer.LoadAsync(stream).ConfigureAwait(false);
+            return byteViewer;
         }
 
         private void MainForm_DragDrop(object sender, DragEventArgs e)

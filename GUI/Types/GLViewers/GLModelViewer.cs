@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 using GUI.Controls;
+using GUI.Types.Renderer;
 using GUI.Utils;
 using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes;
@@ -10,7 +11,7 @@ using ValveResourceFormat.ResourceTypes.ModelAnimation;
 
 #nullable disable
 
-namespace GUI.Types.Renderer
+namespace GUI.Types.GLViewers
 {
     class GLModelViewer : GLSingleNodeViewer
     {
@@ -439,16 +440,16 @@ namespace GUI.Types.Renderer
             // Void
             if (pickingResponse.PixelInfo.ObjectId == 0)
             {
-                selectedNodeRenderer.SelectNode(null);
-                selectedNodeRenderer.ScreenDebugText = string.Empty;
+                SelectedNodeRenderer.SelectNode(null);
+                SelectedNodeRenderer.ScreenDebugText = string.Empty;
                 return;
             }
 
             if (pickingResponse.Intent == PickingTexture.PickingIntent.Select)
             {
                 var sceneNode = Scene.Find(pickingResponse.PixelInfo.ObjectId);
-                selectedNodeRenderer.SelectNode(sceneNode);
-                selectedNodeRenderer.ScreenDebugText = GetModelStatsText();
+                SelectedNodeRenderer.SelectNode(sceneNode);
+                SelectedNodeRenderer.ScreenDebugText = GetModelStatsText();
                 return;
             }
 
@@ -457,7 +458,7 @@ namespace GUI.Types.Renderer
                 var refMesh = modelSceneNode.GetLod1RefMeshes().FirstOrDefault(x => x.MeshIndex == pickingResponse.PixelInfo.MeshId);
                 if (refMesh.MeshName != null)
                 {
-                    var foundFile = GuiContext.FileLoader.FindFileWithContext(refMesh.MeshName + GameFileLoader.CompiledFileSuffix);
+                    var foundFile = GuiContext.FindFileWithContext(refMesh.MeshName + GameFileLoader.CompiledFileSuffix);
                     if (foundFile.Context != null)
                     {
                         foundFile.Context.GLPostLoadAction = (viewerControl) =>

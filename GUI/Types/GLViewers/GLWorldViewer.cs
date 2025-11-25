@@ -3,6 +3,7 @@ using System.Linq;
 using System.Windows.Forms;
 using GUI.Controls;
 using GUI.Forms;
+using GUI.Types.Renderer;
 using GUI.Types.Viewers;
 using GUI.Utils;
 using ValveResourceFormat.IO;
@@ -13,7 +14,7 @@ using static GUI.Types.Renderer.PickingTexture;
 
 #nullable disable
 
-namespace GUI.Types.Renderer
+namespace GUI.Types.GLViewers
 {
     /// <summary>
     /// GL Render control with world controls (render mode, camera selection).
@@ -36,7 +37,7 @@ namespace GUI.Types.Renderer
         {
             this.world = world;
             this.isFromVmap = isFromVmap;
-            EnableOcclusionCulling = isFromVmap;
+            Scene.EnableOcclusionCulling = isFromVmap;
         }
 
         public GLWorldViewer(VrfGuiContext guiContext, WorldNode worldNode)
@@ -92,7 +93,7 @@ namespace GUI.Types.Renderer
             {
                 if (index > 0)
                 {
-                    Camera.SaveCurrentForTransition(Uptime);
+                    Camera.SaveCurrentForTransition();
                     Camera.SetFromTransformMatrix(CameraMatrices[index - 1]);
                 }
             });
@@ -160,7 +161,7 @@ namespace GUI.Types.Renderer
                 yaw = float.Parse(ang.Groups["yaw"].Value, CultureInfo.InvariantCulture) * MathF.PI / 180f;
             }
 
-            Camera.SaveCurrentForTransition(Uptime);
+            Camera.SaveCurrentForTransition();
             Camera.SetLocationPitchYaw(new Vector3(x, y, z), pitch, yaw);
         }
 
@@ -170,7 +171,7 @@ namespace GUI.Types.Renderer
             {
                 if (savedFloats.Length == 5)
                 {
-                    Camera.SaveCurrentForTransition(Uptime);
+                    Camera.SaveCurrentForTransition();
                     Camera.SetLocationPitchYaw(
                         new Vector3(savedFloats[0], savedFloats[1], savedFloats[2]),
                         savedFloats[3],
@@ -195,53 +196,58 @@ namespace GUI.Types.Renderer
             Settings.InvokeRefreshCamerasOnSave();
         }
 
+        private WorldLoader LoadedWorld;
+        private WorldNodeLoader LoadedWorldNode;
+
         protected override void LoadScene()
         {
             var cameraSet = false;
 
             if (world != null)
             {
-                var result = new WorldLoader(world, Scene);
+                LoadedWorld = new WorldLoader(world, Scene);
 
-                if (Parent.Parent is TabControl tabControl)
+                if (LoadedWorld.SkyboxScene != null)
                 {
-                    if (isFromVmap)
-                    {
-                        var worldTabPage = new TabPage("World Data");
-                        tabControl.TabPages.Add(worldTabPage);
-                        Resource.AddTextViewControl(ValveResourceFormat.ResourceType.WorldNode, world, worldTabPage);
-                    }
-
-                    var worldNodeTabPage = new TabPage("Node Data");
-                    tabControl.TabPages.Add(worldNodeTabPage);
-                    Resource.AddTextViewControl(ValveResourceFormat.ResourceType.WorldNode, result.MainWorldNode, worldNodeTabPage);
-
-                    var entitiesTabPage = new TabPage("Entity List");
-                    entitiesTabPage.Controls.Add(new EntityViewer(GuiContext, result.Entities, SelectAndFocusEntity));
-                    tabControl.TabPages.Add(entitiesTabPage);
+                    SkyboxScene = LoadedWorld.SkyboxScene;
                 }
 
-                AddCheckBox("Show Fog", Scene.FogEnabled, v => Scene.FogEnabled = v);
-                AddCheckBox("Color Correction", postProcessRenderer.ColorCorrectionEnabled, v => postProcessRenderer.ColorCorrectionEnabled = v);
-                AddCheckBox("Experimental Lights", false, v => viewBuffer.Data.ExperimentalLightsEnabled = v);
-                AddCheckBox("Occlusion Culling", EnableOcclusionCulling, (v) => EnableOcclusionCulling = v);
-
-                if (result.SkyboxScene != null)
+                if (LoadedWorld.Skybox2D != null)
                 {
-                    SkyboxScene = result.SkyboxScene;
-
-                    AddCheckBox("Show Skybox", ShowSkybox, (v) => ShowSkybox = v);
+                    Skybox2D = LoadedWorld.Skybox2D;
                 }
 
-                if (result.Skybox2D != null)
-                {
-                    Skybox2D = result.Skybox2D;
-                }
+                NavMeshSceneNode.AddNavNodesToScene(LoadedWorld.NavMesh, Scene);
 
+                if (LoadedWorld.CameraMatrices.Count > 0)
+                {
+                    CameraMatrices = LoadedWorld.CameraMatrices;
+
+                    Camera.SetFromTransformMatrix(CameraMatrices[0]);
+                    Camera.SetLocation(Camera.Location + Camera.GetForwardVector() * 10f); // Escape the camera model
+                    cameraSet = true;
+                }
+            }
+
+            if (!cameraSet)
+            {
+                Camera.SetLocation(new Vector3(256));
+                Camera.LookAt(Vector3.Zero);
+            }
+
+            if (worldNode != null)
+            {
+                LoadedWorldNode = new WorldNodeLoader(GuiContext, worldNode);
+                LoadedWorldNode.Load(Scene);
+            }
+        }
+
+        public void InitializeUiControls()
+        {
+            if (world != null)
+            {
                 var uniqueWorldLayers = new HashSet<string>(4);
                 var uniquePhysicsGroups = new HashSet<string>();
-
-                NavMeshSceneNode.AddNavNodesToScene(result.NavMesh, Scene);
 
                 foreach (var node in Scene.AllNodes)
                 {
@@ -264,7 +270,7 @@ namespace GUI.Types.Renderer
 
                     SetAvailableLayers(uniqueWorldLayers);
 
-                    foreach (var worldLayer in result.DefaultEnabledLayers)
+                    foreach (var worldLayer in LoadedWorld.DefaultEnabledLayers)
                     {
                         var checkboxIndex = worldLayersComboBox.FindStringExact(worldLayer);
 
@@ -276,8 +282,8 @@ namespace GUI.Types.Renderer
 
                     worldLayersComboBox.EndUpdate();
 
-                    Scene.SetEnabledLayers(result.DefaultEnabledLayers, skipUpdate: true);
-                    SkyboxScene?.SetEnabledLayers(result.DefaultEnabledLayers, skipUpdate: true);
+                    Scene.SetEnabledLayers(LoadedWorld.DefaultEnabledLayers, skipUpdate: true);
+                    SkyboxScene?.SetEnabledLayers(LoadedWorld.DefaultEnabledLayers, skipUpdate: true);
                 }
 
                 if (uniquePhysicsGroups.Count > 0)
@@ -285,37 +291,20 @@ namespace GUI.Types.Renderer
                     SetAvailablePhysicsGroups(uniquePhysicsGroups);
                 }
 
-                if (result.CameraMatrices.Count > 0)
+                if (LoadedWorld.CameraMatrices.Count > 0)
                 {
-                    CameraMatrices = result.CameraMatrices;
-
                     cameraComboBox.BeginUpdate();
                     cameraComboBox.Items.Add("Set view to camera…");
-                    cameraComboBox.Items.AddRange([.. result.CameraNames]);
+                    cameraComboBox.Items.AddRange([.. LoadedWorld.CameraNames]);
                     cameraComboBox.SelectedIndex = 0;
                     cameraComboBox.EndUpdate();
-
-                    Camera.SetFromTransformMatrix(result.CameraMatrices[0]);
-                    Camera.SetLocation(Camera.Location + Camera.GetForwardVector() * 10f); // Escape the camera model
-                    cameraSet = true;
                 }
 
                 AddSceneExposureSlider();
             }
 
-            if (!cameraSet)
-            {
-                cameraComboBox.Parent.Dispose();
-
-                Camera.SetLocation(new Vector3(256));
-                Camera.LookAt(Vector3.Zero);
-            }
-
             if (worldNode != null)
             {
-                var loader = new WorldNodeLoader(GuiContext, worldNode);
-                loader.Load(Scene);
-
                 var worldLayers = Scene.AllNodes
                     .Select(r => r.LayerName)
                     .Distinct()
@@ -328,7 +317,7 @@ namespace GUI.Types.Renderer
                 }
             }
 
-            Invoke(savedCameraPositionsControl.RefreshSavedPositions);
+            savedCameraPositionsControl.RefreshSavedPositions();
 
             ignoreLayersChangeEvents = false;
         }
@@ -354,7 +343,7 @@ namespace GUI.Types.Renderer
         {
             ArgumentNullException.ThrowIfNull(node);
 
-            selectedNodeRenderer.SelectNode(node, forceDisableDepth: true);
+            SelectedNodeRenderer.SelectNode(node, forceDisableDepth: true);
 
             var bbox = node.BoundingBox;
             var size = bbox.Size;
@@ -363,7 +352,7 @@ namespace GUI.Types.Renderer
             var cameraHeight = bbox.Center.Y + size.Y * 2f;
 
             var location = new Vector3(bbox.Center.X + distance, cameraHeight, bbox.Center.Z + distance);
-            Camera.SaveCurrentForTransition(Uptime);
+            Camera.SaveCurrentForTransition();
             Camera.SetLocation(location);
             Camera.LookAt(bbox.Center);
 
@@ -394,7 +383,7 @@ namespace GUI.Types.Renderer
             var isEntity = sceneNode.EntityData != null;
             if (entityInfoForm == null)
             {
-                entityInfoForm = new EntityInfoForm(GuiContext.FileLoader);
+                entityInfoForm = new EntityInfoForm(GuiContext);
                 entityInfoForm.Show();
                 entityInfoForm.EntityInfoControl.OutputsGrid.CellDoubleClick += OnEntityInfoOutputsCellDoubleClick;
                 entityInfoForm.EntityInfoControl.Disposed += OnEntityInfoFormDisposed;
@@ -520,7 +509,7 @@ namespace GUI.Types.Renderer
             // Void
             if (pixelInfo.ObjectId == 0 || pixelInfo.Unused2 != 0)
             {
-                selectedNodeRenderer.SelectNode(null);
+                SelectedNodeRenderer.SelectNode(null);
                 return;
             }
 
@@ -536,11 +525,11 @@ namespace GUI.Types.Renderer
             {
                 if ((ModifierKeys & Keys.Control) > 0)
                 {
-                    selectedNodeRenderer.ToggleNode(sceneNode);
+                    SelectedNodeRenderer.ToggleNode(sceneNode);
                 }
                 else
                 {
-                    selectedNodeRenderer.SelectNode(sceneNode);
+                    SelectedNodeRenderer.SelectNode(sceneNode);
                 }
 
                 //Update the entity properties window if it was opened
@@ -573,7 +562,7 @@ namespace GUI.Types.Renderer
                 }
             }
 
-            var foundFile = GuiContext.FileLoader.FindFileWithContext(filename + GameFileLoader.CompiledFileSuffix);
+            var foundFile = GuiContext.FindFileWithContext(filename + GameFileLoader.CompiledFileSuffix);
 
             if (foundFile.Context == null)
             {

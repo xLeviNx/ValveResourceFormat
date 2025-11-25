@@ -17,9 +17,9 @@ namespace GUI.Types.Exporter
     {
         public static void ExtractFileFromPackageEntry(PackageEntry file, VrfGuiContext vrfGuiContext, bool decompile)
         {
-            var stream = AdvancedGuiFileLoader.GetPackageEntryStream(vrfGuiContext.CurrentPackage, file);
+            var stream = GameFileLoader.GetPackageEntryStream(vrfGuiContext.CurrentPackage, file);
 
-            ExtractFileFromStream(file.GetFileName(), stream, vrfGuiContext, decompile);
+            ExtractFileFromStream(file.GetFullPath(), stream, vrfGuiContext, decompile);
         }
 
         public static void ExtractFileFromStream(string fileName, Stream stream, VrfGuiContext vrfGuiContext, bool decompile)
@@ -145,7 +145,7 @@ namespace GUI.Types.Exporter
                     Title = "Choose where to save the file",
                     InitialDirectory = Settings.Config.SaveDirectory,
                     Filter = "All files (*.*)|*.*",
-                    FileName = fileName,
+                    FileName = Path.GetFileName(fileName),
                     AddToRecent = true,
                 };
                 var userOK = dialog.ShowDialog();

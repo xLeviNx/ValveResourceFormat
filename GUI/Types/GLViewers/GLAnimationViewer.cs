@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using GUI.Types.Renderer;
 using GUI.Utils;
 using ValveResourceFormat;
 using ValveResourceFormat.ResourceTypes;
@@ -7,7 +9,7 @@ using ValveResourceFormat.ResourceTypes.ModelAnimation;
 using ValveResourceFormat.ResourceTypes.ModelAnimation2;
 using ValveResourceFormat.Serialization.KeyValues;
 
-namespace GUI.Types.Renderer
+namespace GUI.Types.GLViewers
 {
     class GLAnimationViewer : GLModelViewer
     {
@@ -25,6 +27,7 @@ namespace GUI.Types.Renderer
                 clip = animationClip;
 
                 var skeletonResource = guiContext.LoadFileCompiled(animationClip.SkeletonName);
+                Debug.Assert(skeletonResource != null);
                 SkeletonData = ((BinaryKV3)skeletonResource.DataBlock!).Data;
             }
             else
@@ -53,12 +56,17 @@ namespace GUI.Types.Renderer
                 };
 
                 Scene.Add(skeletonSceneNode, true);
-                skeletonSceneNode.Update(new(0f, this)); // update bbox for viewer
+                skeletonSceneNode.Update(new Scene.UpdateContext
+                {
+                    TextRenderer = TextRenderer,
+                    Timestep = 0f,
+                }); // update bbox for viewer
             }
 
             void LoadClip(AnimationClip clip, string skeletonName, bool firstTime = true)
             {
                 var skeletonResource = GuiContext.LoadFileCompiled(clip.SkeletonName);
+                Debug.Assert(skeletonResource != null);
                 SkeletonData = ((BinaryKV3)skeletonResource.DataBlock!).Data;
                 LoadSkeleton(firstTime);
                 SetAnimationControllerUpdateHandler();

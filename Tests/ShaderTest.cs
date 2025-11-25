@@ -450,6 +450,7 @@ namespace Tests
 
         private static IEnumerable<TestCaseData> SpirvReflectionTestCases()
         {
+            yield return new TestCaseData("vcs65_compute_depthbin_cullbits_vulkan_50_cs.vcs", 0, 0);
             yield return new TestCaseData("vcs68_tower_force_field_vulkan_40_vs.vcs", 0, 9);
             yield return new TestCaseData("vcs68_tower_force_field_vulkan_40_ps.vcs", 1, 1);
             yield return new TestCaseData("vcs68_csgo_simple_2way_blend_vulkan_60_rtx.vcs", 0x6, 0);
@@ -457,6 +458,7 @@ namespace Tests
             yield return new TestCaseData("vcs69_downsample_depth_cs_vulkan_50_cs.vcs", 0, 0x20);
             yield return new TestCaseData("vcs69_zstd5_npr_dummy_vulkan_50_vs.vcs", 0, 0);
             yield return new TestCaseData("vcs69_bloom_vulkan_40_ps.vcs", 0, 0);
+            yield return new TestCaseData("vcs70_resource_bloom_vulkan_40_ps.vcs", 0, 0);
         }
 
         [Test, TestCaseSource(nameof(SpirvReflectionTestCases))]
@@ -498,6 +500,7 @@ namespace Tests
             {
                 ["heading,10/2"] = new("heading", 10, variableOrder: 2),
                 ["heading,12/group,12/5"] = new("heading", 12, "group", 12, 5),
+                ["Interaction Effects, 500,20"] = new("Interaction Effects", headingOrder: 500),
 
                 [string.Empty] = new(),
                 ["h,1/g,2"] = new("h", 1, variableOrder: 2),
@@ -506,7 +509,7 @@ namespace Tests
                 ["h"] = new("h"),
 
                 ["//////"] = new(),
-                ["z,z,z/z,z,z,z/z,z,z,z/,z,z,z"] = new(heading: "z,z", group: "z,z,z"),
+                ["z,z,z/z,z,z,z/z,z,z,z/,z,z,z"] = new(heading: "z,z,z", group: "z,z,z,z"),
             };
 
             foreach (var (compactString, expected) in testCases)

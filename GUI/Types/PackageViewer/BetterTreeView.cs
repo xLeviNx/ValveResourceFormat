@@ -293,14 +293,17 @@ namespace GUI.Types.PackageViewer
 
         public static VirtualPackageNode AddFolderNode(VirtualPackageNode currentNode, string directory, uint size)
         {
-            foreach (var subPathSpan in directory.AsSpan().Split([Package.DirectorySeparatorChar]))
-            {
-                var subPath = subPathSpan.ToString();
+            var directorySpan = directory.AsSpan();
 
-                if (!currentNode.Folders.TryGetValue(subPath, out var subNode))
+            foreach (var subPathRange in directorySpan.Split([Package.DirectorySeparatorChar]))
+            {
+                var subPath = directorySpan[subPathRange];
+
+                if (!currentNode.Folders.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(subPath, out var subNode))
                 {
-                    var toAdd = new VirtualPackageNode(subPath, size, currentNode);
-                    currentNode.Folders.Add(subPath, toAdd);
+                    var subPathString = subPath.ToString();
+                    var toAdd = new VirtualPackageNode(subPathString, size, currentNode);
+                    currentNode.Folders.Add(subPathString, toAdd);
                     currentNode = toAdd;
                 }
                 else

@@ -4,9 +4,6 @@ using GUI.Types.Renderer.Buffers;
 using GUI.Utils;
 using OpenTK.Graphics.OpenGL;
 using ValveResourceFormat.ResourceTypes;
-using static GUI.Types.Renderer.GLSceneViewer;
-
-#nullable disable
 
 namespace GUI.Types.Renderer
 {
@@ -14,24 +11,18 @@ namespace GUI.Types.Renderer
     {
         public readonly struct UpdateContext
         {
-            public GLSceneViewer View { get; }
-            public float Timestep { get; }
-
-            public UpdateContext(float timestep, GLSceneViewer view)
-            {
-                View = view;
-                Timestep = timestep;
-            }
+            public TextRenderer TextRenderer { get; init; }
+            public float Timestep { get; init; }
         }
 
         public struct RenderContext
         {
-            public GLSceneViewer View { get; init; }
             public Scene Scene { get; set; }
-            public Camera Camera { get; set; }
+            public Camera Camera { get; init; }
             public Framebuffer Framebuffer { get; set; }
             public RenderPass RenderPass { get; set; }
-            public Shader ReplacementShader { get; set; }
+            public Shader? ReplacementShader { get; set; }
+            public List<(ReservedTextureSlots Slot, string Name, RenderTexture Texture)> Textures { get; init; }
         }
 
         public Dictionary<string, byte> RenderAttributes { get; } = [];
@@ -39,9 +30,9 @@ namespace GUI.Types.Renderer
         public WorldFogInfo FogInfo { get; set; } = new();
         public WorldPostProcessInfo PostProcessInfo { get; set; } = new();
 
-        private UniformBuffer<LightingConstants> lightingBuffer;
-        public UniformBuffer<EnvMapArray> envMapBuffer;
-        private UniformBuffer<LightProbeVolumeArray> lpvBuffer;
+        private UniformBuffer<LightingConstants>? lightingBuffer;
+        public UniformBuffer<EnvMapArray>? envMapBuffer;
+        private UniformBuffer<LightProbeVolumeArray>? lpvBuffer;
 
         public VrfGuiContext GuiContext { get; }
         public Octree StaticOctree { get; }
@@ -49,14 +40,14 @@ namespace GUI.Types.Renderer
 
         public bool ShowToolsMaterials { get; set; }
         public bool FogEnabled { get; set; } = true;
-        public bool IsSkyboxMap { get; set; }
+        public bool EnableOcclusionCulling { get; set; }
 
         public IEnumerable<SceneNode> AllNodes => staticNodes.Concat(dynamicNodes);
 
         private readonly List<SceneNode> staticNodes = [];
         private readonly List<SceneNode> dynamicNodes = [];
 
-        private Shader OutlineShader;
+        private Shader? OutlineShader;
 
         public Scene(VrfGuiContext context, float sizeHint = 32768)
         {
@@ -91,7 +82,7 @@ namespace GUI.Types.Renderer
             octree.Insert(node);
         }
 
-        public SceneNode Find(uint id)
+        public SceneNode? Find(uint id)
         {
             if (id == 0)
             {
@@ -122,14 +113,14 @@ namespace GUI.Types.Renderer
             }
         }
 
-        public SceneNode Find(EntityLump.Entity entity)
+        public SceneNode? Find(EntityLump.Entity entity)
         {
             bool IsMatchingEntity(SceneNode node) => node.EntityData == entity;
 
             return staticNodes.Find(IsMatchingEntity) ?? dynamicNodes.Find(IsMatchingEntity);
         }
 
-        public SceneNode FindNodeByKeyValue(string keyToFind, string valueToFind)
+        public SceneNode? FindNodeByKeyValue(string keyToFind, string valueToFind)
         {
             bool IsMatchingEntity(SceneNode node)
             {
@@ -184,6 +175,8 @@ namespace GUI.Types.Renderer
 
         public void UpdateBuffers()
         {
+            Debug.Assert(lightingBuffer is not null && envMapBuffer is not null && lpvBuffer is not null);
+
             lightingBuffer.Update();
             envMapBuffer.Update();
             lpvBuffer.Update();
@@ -191,6 +184,8 @@ namespace GUI.Types.Renderer
 
         public void SetSceneBuffers()
         {
+            Debug.Assert(lightingBuffer is not null && envMapBuffer is not null && lpvBuffer is not null);
+
             lightingBuffer.BindBufferBase();
             envMapBuffer.BindBufferBase();
             lpvBuffer.BindBufferBase();
@@ -241,6 +236,8 @@ namespace GUI.Types.Renderer
 
         private void Add(MeshBatchRenderer.Request request, RenderPass renderPass)
         {
+            Debug.Assert(request.Call is not null);
+
             if (!ShowToolsMaterials && request.Call.Material.IsToolsMaterial)
             {
                 return;
@@ -278,7 +275,7 @@ namespace GUI.Types.Renderer
             return (node.BoundingBox.Center - camera.Location).LengthSquared();
         }
 
-        public void CollectSceneDrawCalls(Camera camera, Frustum cullFrustum = null)
+        public void CollectSceneDrawCalls(Camera camera, Frustum? cullFrustum = null)
         {
             foreach (var bucket in renderLists.Values)
             {
@@ -294,7 +291,7 @@ namespace GUI.Types.Renderer
             // Collect mesh calls
             foreach (var node in cullResults)
             {
-                if (node is IRenderableMeshCollection meshCollection)
+                if (node is MeshCollectionNode meshCollection)
                 {
                     foreach (var mesh in meshCollection.RenderableMeshes)
                     {
@@ -374,7 +371,7 @@ namespace GUI.Types.Renderer
         }
 
         private List<SceneNode> CulledShadowNodes { get; } = [];
-        private readonly List<RenderableMesh> listWithSingleMesh = [null];
+        private readonly List<RenderableMesh> listWithSingleMesh = new(1);
         private Dictionary<DepthOnlyProgram, List<MeshBatchRenderer.Request>> CulledShadowDrawCalls { get; } = new()
         {
             [DepthOnlyProgram.Static] = [],
@@ -408,7 +405,7 @@ namespace GUI.Types.Renderer
             {
                 List<RenderableMesh> meshes;
 
-                if (node is IRenderableMeshCollection meshCollection)
+                if (node is MeshCollectionNode meshCollection)
                 {
                     meshes = meshCollection.RenderableMeshes;
                 }
@@ -503,7 +500,7 @@ namespace GUI.Types.Renderer
 
         public void RenderOcclusionProxies(RenderContext renderContext, Shader depthOnlyShader)
         {
-            if (!renderContext.View.EnableOcclusionCulling)
+            if (!EnableOcclusionCulling)
             {
                 return;
             }
@@ -623,14 +620,14 @@ namespace GUI.Types.Renderer
             return maxTests;
         }
 
-        public void GetOcclusionTestResults(bool occlusionEnabled)
+        public void GetOcclusionTestResults()
         {
             if (!occlusionDirty)
             {
                 return;
             }
 
-            if (!occlusionEnabled)
+            if (!EnableOcclusionCulling)
             {
                 ClearOccludedStateRecursive(StaticOctree.Root);
                 occlusionDirty = false;
@@ -703,6 +700,12 @@ namespace GUI.Types.Renderer
         {
             foreach (var renderer in AllNodes)
             {
+                if (renderer.LayerName == null)
+                {
+                    renderer.LayerEnabled = false;
+                    continue;
+                }
+
                 if (renderer.LayerName.StartsWith("LightProbeGrid", StringComparison.Ordinal))
                 {
                     continue;
@@ -749,6 +752,8 @@ namespace GUI.Types.Renderer
 
         public void CalculateLightProbeBindings()
         {
+            Debug.Assert(lpvBuffer is not null);
+
             if (LightingInfo.LightProbes.Count == 0)
             {
                 return;
@@ -862,7 +867,7 @@ namespace GUI.Types.Renderer
             foreach (var node in AllNodes)
             {
                 var precomputedHandshake = node.CubeMapPrecomputedHandshake;
-                SceneEnvMap preComputed = default;
+                SceneEnvMap? preComputed = default;
 
                 if (precomputedHandshake > 0)
                 {
@@ -958,13 +963,15 @@ namespace GUI.Types.Renderer
 #endif
                 if (LightingInfo.CubemapType == CubemapType.CubemapArray)
                 {
-                    node.EnvMaps = null; // no longer need
+                    node.EnvMaps = []; // no longer needed
                 }
             }
         }
 
         private void UpdateGpuEnvmapData(SceneEnvMap envMap, int index)
         {
+            Debug.Assert(envMapBuffer is not null);
+
             if (!Matrix4x4.Invert(envMap.Transform, out var worldToLocal))
             {
                 throw new InvalidOperationException("Matrix invert failed");

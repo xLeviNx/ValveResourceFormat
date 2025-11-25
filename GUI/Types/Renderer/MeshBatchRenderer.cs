@@ -177,7 +177,7 @@ namespace GUI.Types.Renderer
 
                         if (shader.Parameters.ContainsKey("D_BAKED_LIGHTING_FROM_PROBE"))
                         {
-                            uniforms.VisibleLightProbeVolume = shader.GetUniformBlockIndex("g_nVisibleLPV");
+                            uniforms.VisibleLightProbeVolume = shader.GetUniformLocation("g_nVisibleLPV");
                             uniforms.LPVIrradianceTexture = shader.GetUniformLocation("g_tLPV_Irradiance");
                             uniforms.LPVIndicesTexture = shader.GetUniformLocation("g_tLPV_Indices");
                             uniforms.LPVScalarsTexture = shader.GetUniformLocation("g_tLPV_Scalars");
@@ -194,7 +194,7 @@ namespace GUI.Types.Renderer
 
                         shader.Use();
 
-                        foreach (var (slot, name, texture) in context.View.Textures)
+                        foreach (var (slot, name, texture) in context.Textures)
                         {
                             shader.SetTexture((int)slot, name, texture);
                         }

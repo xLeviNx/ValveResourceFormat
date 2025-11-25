@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using GUI.Controls;
+using GUI.Types.Renderer;
 using GUI.Utils;
 using OpenTK.Graphics.OpenGL;
 using SkiaSharp;
@@ -17,7 +18,7 @@ using static ValveResourceFormat.ResourceTypes.Texture;
 
 #nullable disable
 
-namespace GUI.Types.Renderer
+namespace GUI.Types.GLViewers
 {
     class GLTextureViewer : GLViewerControl
     {
@@ -130,10 +131,8 @@ namespace GUI.Types.Renderer
         {
             GuiContext = guiContext;
 
-            GLLoad += OnLoad;
             GLControl.PreviewKeyDown += OnPreviewKeyDown;
 
-#pragma warning disable WFO5001
             ShowLightBackground = !Application.IsDarkModeEnabled;
 
             SetZoomLabel();
@@ -477,7 +476,7 @@ namespace GUI.Types.Renderer
                 var value = (TextureCodec)values.GetValue(flag);
                 var name = Enum.GetName(value);
 
-                var isCombinedFlag = (value & (value - 1)) != 0;
+                var isCombinedFlag = (value & value - 1) != 0;
                 var skipFlags = TextureCodec.None | TextureCodec.Auto;
 
                 if (isCombinedFlag || skipFlags.HasFlag(value))
@@ -862,9 +861,9 @@ namespace GUI.Types.Renderer
             );
         }
 
-        protected override void OnResize(object sender, EventArgs e)
+        protected override void OnResize()
         {
-            base.OnResize(sender, e);
+            base.OnResize();
 
             if (texture != null)
             {
@@ -970,21 +969,8 @@ namespace GUI.Types.Renderer
         private void UploadBitmap(SKBitmap bitmap)
         {
             Debug.Assert(bitmap != null);
-            texture = LoadBitmapTexture(bitmap);
+            texture = MaterialLoader.LoadBitmapTexture(bitmap);
             InvalidateRender();
-        }
-
-        public static RenderTexture LoadBitmapTexture(SKBitmap bitmap)
-        {
-            var texture = new RenderTexture(TextureTarget.Texture2D, bitmap.Width, bitmap.Height, 1, 1);
-
-            var isHdr = bitmap.ColorType == HdrBitmapColorType;
-            var store = GLTextureDecoder.GetImageExportFormat(isHdr);
-
-            GL.TextureStorage2D(texture.Handle, 1, store.SizedInternalFormat, texture.Width, texture.Height);
-            GL.TextureSubImage2D(texture.Handle, 0, 0, 0, texture.Width, texture.Height, store.PixelFormat, store.PixelType, bitmap.GetPixels());
-
-            return texture;
         }
 
         private void GenerateNewSvgBitmap()
@@ -1015,7 +1001,7 @@ namespace GUI.Types.Renderer
             }
         }
 
-        private void OnLoad(object sender, EventArgs e)
+        protected override void OnGLLoad()
         {
             if (Svg == null) /// Svg will be setup on <see cref="FirstPaint"/> because it needs to be rescaled
             {
@@ -1031,14 +1017,9 @@ namespace GUI.Types.Renderer
 
             MainFramebuffer.ClearColor = OpenTK.Mathematics.Color4.White;
             MainFramebuffer.ClearMask = ClearBufferMask.ColorBufferBit;
-
-            GLLoad -= OnLoad;
-
-            // Bind paint event at the end of the processing loop so that first paint event has correctly sized gl control
-            BeginInvoke(FirstPaint);
         }
 
-        private void FirstPaint()
+        protected override void OnFirstPaint()
         {
             if (GLControl.Width < ActualTextureSize.X || GLControl.Height < ActualTextureSize.Y || Svg != null)
             {

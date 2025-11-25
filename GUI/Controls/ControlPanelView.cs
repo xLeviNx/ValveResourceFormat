@@ -36,9 +36,9 @@ namespace GUI.Controls
             return checkbox.CheckBox;
         }
 
-        public ComboBox AddSelection(string name, Action<string, int> changeCallback)
+        public ComboBox AddSelection(string name, Action<string, int> changeCallback, bool horizontal = false, bool fill = false)
         {
-            var selectionControl = new GLViewerSelectionControl(name);
+            var selectionControl = new GLViewerSelectionControl(name, horizontal, fill);
 
             ControlsPanel.Controls.Add(selectionControl);
 
@@ -63,14 +63,22 @@ namespace GUI.Controls
 
             SetControlLocation(selectionControl);
 
-            selectionControl.CheckedListBox.ItemCheck += (_, __) =>
+            selectionControl.CheckedListBox.ItemCheck += (_, e) =>
             {
-                // ItemCheck is called before CheckedItems is updated
-                BeginInvoke((MethodInvoker)(() =>
+                // Manually calculate the new checked items since ItemCheck is called before CheckedItems is updated
+                var checkedItems = selectionControl.CheckedListBox.CheckedItems.OfType<string>().ToHashSet();
+                var changedItem = selectionControl.CheckedListBox.Items[e.Index] as string;
+
+                if (e.NewValue == CheckState.Checked)
                 {
-                    selectionControl.Refresh();
-                    changeCallback(selectionControl.CheckedListBox.CheckedItems.OfType<string>());
-                }));
+                    checkedItems.Add(changedItem);
+                }
+                else if (e.NewValue == CheckState.Unchecked)
+                {
+                    checkedItems.Remove(changedItem);
+                }
+
+                changeCallback(checkedItems);
             };
 
             return selectionControl.CheckedListBox;

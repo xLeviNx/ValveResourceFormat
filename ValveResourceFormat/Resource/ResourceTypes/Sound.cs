@@ -286,9 +286,8 @@ namespace ValveResourceFormat.ResourceTypes
             var obj = (BinaryKV3)Resource.GetBlockByType(BlockType.CTRL);
             var soundClass = obj.Data.GetStringProperty("_class");
 
-            if (soundClass != "CVoiceContainerDefault")
+            if (soundClass is not "CVoiceContainerDefault" and not "CVoiceContainerEnvelope")
             {
-                Console.Error.WriteLine($"Unsupported sound file: {soundClass}");
                 return false;
             }
 

@@ -3,8 +3,6 @@ using OpenTK.Graphics.OpenGL;
 using ValveResourceFormat.ResourceTypes.ModelAnimation;
 using PrimitiveType = OpenTK.Graphics.OpenGL.PrimitiveType;
 
-#nullable disable
-
 namespace GUI.Types.Renderer
 {
     class SkeletonSceneNode : SceneNode
@@ -48,7 +46,7 @@ namespace GUI.Types.Renderer
 
             foreach (var root in skeleton.Roots)
             {
-                DrawSkeletonRecursive(root, vertices, context.View.TextRenderer, animationController);
+                DrawSkeletonRecursive(root, vertices, context.TextRenderer, animationController);
             }
 
             AABB bounds = default;

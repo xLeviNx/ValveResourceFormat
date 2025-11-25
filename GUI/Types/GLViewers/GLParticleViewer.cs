@@ -1,10 +1,11 @@
 using GUI.Controls;
+using GUI.Types.Renderer;
 using GUI.Utils;
 using ValveResourceFormat.ResourceTypes;
 
 #nullable disable
 
-namespace GUI.Types.Renderer
+namespace GUI.Types.GLViewers
 {
     /// <summary>
     /// GL Render control with particle controls (control points? particle counts?).
@@ -42,9 +43,9 @@ namespace GUI.Types.Renderer
             Scene.Add(particleSceneNode, true);
         }
 
-        protected override void OnLoad(object sender, EventArgs e)
+        protected override void OnGLLoad()
         {
-            base.OnLoad(sender, e);
+            base.OnGLLoad();
 
             Camera.SetLocation(new Vector3(200, 200, 200));
             Camera.LookAt(Vector3.Zero);
@@ -64,7 +65,7 @@ namespace GUI.Types.Renderer
             slowmodeTrackBar.TrackBar.Maximum = 100;
             slowmodeTrackBar.TrackBar.Value = 100;
 
-            AddCheckBox("Show render bounds", ShowRenderBounds, value => selectedNodeRenderer.SelectNode(value ? particleSceneNode : null));
+            AddCheckBox("Show render bounds", ShowRenderBounds, value => SelectedNodeRenderer.SelectNode(value ? particleSceneNode : null));
         }
 
         protected override void OnPicked(object sender, PickingTexture.PickingResponse pixelInfo)

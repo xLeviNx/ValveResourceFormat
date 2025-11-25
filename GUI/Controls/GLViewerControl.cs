@@ -3,10 +3,10 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
+using GUI.Types.GLViewers;
 using GUI.Types.Renderer;
 using GUI.Utils;
 using OpenTK.Graphics.OpenGL;
-using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Desktop;
 using SkiaSharp;
 using static GUI.Types.Renderer.PickingTexture;
@@ -17,26 +17,8 @@ namespace GUI.Controls
 {
     partial class GLViewerControl : ControlPanelView
     {
-        public const int OpenGlVersionMajor = 4;
-        public const int OpenGlVersionMinor = 6;
-
-        public static Version OpenGlVersion = new(OpenGlVersionMajor, OpenGlVersionMinor);
-
-#if DEBUG
-        public static ContextFlags OpenGlFlags => ContextFlags.ForwardCompatible | ContextFlags.Debug;
-#else
-        public static ContextFlags OpenGlFlags => ContextFlags.ForwardCompatible;
-#endif
-
-        private enum ParallelShaderCompileType : byte
-        {
-            None,
-            Arb,
-            Khr,
-        }
-        private static ParallelShaderCompileType ParallelShaderCompileSupport;
-
         protected override Panel ControlsPanel => controlsPanel;
+        protected SplitContainer ViewerSplitContainer => splitContainer;
         static readonly TimeSpan FpsUpdateTimeSpan = TimeSpan.FromSeconds(0.1);
 
         public GLControl GLControl { get; }
@@ -52,7 +34,8 @@ namespace GUI.Controls
 
 
         public event EventHandler<RenderEventArgs> GLPaint;
-        public event EventHandler GLLoad;
+
+        protected virtual void OnGLLoad() { }
 
         protected readonly PostProcessRenderer postProcessRenderer;
 
@@ -82,8 +65,8 @@ namespace GUI.Controls
 
             var settings = new NativeWindowSettings()
             {
-                APIVersion = OpenGlVersion,
-                Flags = OpenGlFlags,
+                APIVersion = GLEnvironment.RequiredVersion,
+                Flags = GLEnvironment.Flags,
                 RedBits = 8,
                 GreenBits = 8,
                 BlueBits = 8,
@@ -98,7 +81,6 @@ namespace GUI.Controls
                 Dock = DockStyle.Fill
             };
 
-            GLControl.Load += OnLoad;
             GLControl.Paint += OnPaint;
             GLControl.Resize += OnResize;
             GLControl.MouseEnter += OnMouseEnter;
@@ -232,7 +214,6 @@ namespace GUI.Controls
 
         private void OnDisposed(object sender, EventArgs e)
         {
-            GLControl.Load -= OnLoad;
             GLControl.Paint -= OnPaint;
             GLControl.Resize -= OnResize;
             GLControl.MouseEnter -= OnMouseEnter;
@@ -260,7 +241,7 @@ namespace GUI.Controls
         {
             if (GLControl.Visible)
             {
-                HandleResize();
+                OnResize();
 
                 if (Form.ActiveForm != null)
                 {
@@ -435,9 +416,10 @@ namespace GUI.Controls
         private int MaxSamples;
         private int NumSamples => Math.Max(1, Math.Min(Settings.Config.AntiAliasingSamples, MaxSamples));
 
-        private void OnLoad(object sender, EventArgs e)
+        private bool loaded;
+
+        public void InitializeLoad()
         {
-            GLControl.Load -= OnLoad;
             GLControl.MakeCurrent();
             GLControl.Context.SwapInterval = Settings.Config.Vsync;
 
@@ -458,7 +440,7 @@ namespace GUI.Controls
             GL.DebugMessageControl(DebugSourceControl.DontCare, DebugTypeControl.DontCare, DebugSeverityControl.DebugSeverityHigh, 0, Array.Empty<int>(), true);
 #endif
 
-            CheckOpenGL();
+            GLEnvironment.Initialize();
             MaxSamples = GL.GetInteger(GetPName.MaxSamples);
             GLDefaultFramebuffer = Framebuffer.GetGLDefaultFramebuffer();
 
@@ -481,11 +463,11 @@ namespace GUI.Controls
             GL.ClearDepth(0.0f);
 
             // Parallel shader compilation, 0xFFFFFFFF requests an implementation-specific maximum
-            if (ParallelShaderCompileSupport == ParallelShaderCompileType.Khr)
+            if (GLEnvironment.ParallelShaderCompileSupport == GLEnvironment.ParallelShaderCompileType.Khr)
             {
                 GL.Khr.MaxShaderCompilerThreads(uint.MaxValue);
             }
-            else if (ParallelShaderCompileSupport == ParallelShaderCompileType.Arb)
+            else if (GLEnvironment.ParallelShaderCompileSupport == GLEnvironment.ParallelShaderCompileType.Arb)
             {
                 GL.Arb.MaxShaderCompilerThreads(uint.MaxValue);
             }
@@ -505,7 +487,7 @@ namespace GUI.Controls
 
                 MainFramebuffer.ClearMask |= ClearBufferMask.StencilBufferBit;
 
-                GLLoad?.Invoke(this, e);
+                OnGLLoad();
             }
             catch (Exception exception)
             {
@@ -516,13 +498,23 @@ namespace GUI.Controls
                 throw;
             }
 
-            HandleResize();
+            loaded = true;
+
+            OnResize();
+
+            // Bind paint event at the end of the processing loop so that first paint event has correctly sized gl control
+            OnFirstPaint();
 
             lastUpdate = Stopwatch.GetTimestamp();
         }
 
         private void OnPaint(object sender, EventArgs e)
         {
+            if (!loaded)
+            {
+                return;
+            }
+
             Application.DoEvents();
 
             if (IsDisposed || GLControl.IsDisposed || !GLControl.Visible)
@@ -664,12 +656,17 @@ namespace GUI.Controls
                 return;
             }
 
-            HandleResize();
+            OnResize();
             GLControl.Invalidate();
         }
 
-        private void HandleResize()
+        protected virtual void OnResize()
         {
+            if (!loaded)
+            {
+                return;
+            }
+
             var (w, h) = (GLControl.Width, GLControl.Height);
 
             if (w <= 0 || h <= 0)
@@ -705,6 +702,12 @@ namespace GUI.Controls
             Picker?.Resize(w, h);
         }
 
+
+        protected virtual void OnFirstPaint()
+        {
+            //
+        }
+
         private void OnAppActivated(object sender, EventArgs e)
         {
             GLControl.Invalidate();
@@ -718,7 +721,7 @@ namespace GUI.Controls
             }
 
             lastUpdate = Stopwatch.GetTimestamp();
-            HandleResize();
+            OnResize();
             GLControl.Invalidate();
         }
 
@@ -765,50 +768,5 @@ namespace GUI.Controls
             GLControl.Invalidate();
         }
 #endif
-
-        public static void CheckOpenGL()
-        {
-            if (Settings.GpuRendererAndDriver != null)
-            {
-                return;
-            }
-
-            var minor = GL.GetInteger(GetPName.MinorVersion);
-            var major = GL.GetInteger(GetPName.MajorVersion);
-
-            var gpu = $"GPU: {GL.GetString(StringName.Renderer)}, Driver: {GL.GetString(StringName.Version)}";
-
-            Settings.GpuRendererAndDriver = gpu;
-
-            Log.Debug("OpenGL", $"{gpu}, OS: {Environment.OSVersion}");
-
-            MaterialLoader.MaxTextureMaxAnisotropy = GL.GetFloat((GetPName)ExtTextureFilterAnisotropic.MaxTextureMaxAnisotropyExt);
-
-            if (major < OpenGlVersionMajor || minor < OpenGlVersionMinor)
-            {
-                throw new NotSupportedException($"Source 2 Viewer requires OpenGL {OpenGlVersionMajor}.{OpenGlVersionMinor}, but you have {major}.{minor}.");
-            }
-
-            var extensionCount = GL.GetInteger(GetPName.NumExtensions);
-            var extensions = new HashSet<string>(extensionCount);
-            for (var i = 0; i < extensionCount; i++)
-            {
-                var extension = GL.GetString(StringNameIndexed.Extensions, i);
-                extensions.Add(extension);
-            }
-
-            if (extensions.Contains("GL_KHR_parallel_shader_compile"))
-            {
-                ParallelShaderCompileSupport = ParallelShaderCompileType.Khr;
-            }
-            else if (extensions.Contains("GL_ARB_parallel_shader_compile"))
-            {
-                ParallelShaderCompileSupport = ParallelShaderCompileType.Arb;
-            }
-            else
-            {
-                Log.Warn("OpenGL", "Parallel shader compilation is not supported.");
-            }
-        }
     }
 }

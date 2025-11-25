@@ -8,8 +8,6 @@ using ValveResourceFormat.Blocks;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
 
-#nullable disable
-
 namespace GUI.Types.Renderer
 {
     [DebuggerDisplay("{Name}")]
@@ -24,7 +22,7 @@ namespace GUI.Types.Renderer
         public List<DrawCall> DrawCallsBlended { get; } = [];
         private IEnumerable<DrawCall> DrawCalls => DrawCallsOpaque.Concat(DrawCallsOverlay).Concat(DrawCallsBlended);
 
-        public StorageBuffer BoneMatricesGpu { get; private set; }
+        public StorageBuffer? BoneMatricesGpu { get; private set; }
         public int MeshBoneOffset { get; private set; }
         public int MeshBoneCount { get; private set; }
         public int BoneWeightCount { get; private set; }
@@ -32,10 +30,10 @@ namespace GUI.Types.Renderer
         public string Name { get; }
         public int MeshIndex { get; }
 
-        public FlexStateManager FlexStateManager { get; }
+        public FlexStateManager? FlexStateManager { get; }
 
-        public RenderableMesh(Mesh mesh, int meshIndex, Scene scene, Model model = null,
-            Dictionary<string, string> initialMaterialTable = null, Morph morph = null, bool isAggregate = false)
+        public RenderableMesh(Mesh mesh, int meshIndex, Scene scene, Model? model = null,
+            Dictionary<string, string>? initialMaterialTable = null, Morph? morph = null, bool isAggregate = false)
         {
             guiContext = scene.GuiContext;
 
@@ -146,7 +144,7 @@ namespace GUI.Types.Renderer
             }
         }
 
-        private void ConfigureDrawCalls(Scene scene, VBIB vbib, KVObject[] sceneObjects, Dictionary<string, string> materialReplacementTable, bool isAggregate)
+        private void ConfigureDrawCalls(Scene scene, VBIB vbib, KVObject[] sceneObjects, Dictionary<string, string>? materialReplacementTable, bool isAggregate)
         {
             if (vbib.VertexBuffers.Count == 0)
             {
@@ -362,7 +360,7 @@ namespace GUI.Types.Renderer
                             newInputLayout.Add(inputField);
                         }
 
-                        vertexBuffer.InputLayoutFields = newInputLayout.ToArray();
+                        vertexBuffer.InputLayoutFields = [.. newInputLayout];
                     }
 
                     drawCall.VertexBuffers[bindingIndex++] = vertexBuffer;
@@ -406,11 +404,64 @@ namespace GUI.Types.Renderer
 
             return drawCall;
         }
+
+        private RenderableMesh(string name, AABB bounds, VrfGuiContext guiContext)
+        {
+            Name = name;
+            BoundingBox = bounds;
+            this.guiContext = guiContext;
+        }
+
+        /// <summary>
+        public static RenderableMesh CreateMesh(string name, RenderMaterial material, VBIB vertexIndexBuffers, AABB bounds, VrfGuiContext guiContext)
+        {
+            var mesh = new RenderableMesh(name, bounds, guiContext);
+            var gpuVbib = guiContext.MeshBufferCache.CreateVertexIndexBuffers(name, vertexIndexBuffers);
+
+            var drawCall = new DrawCall()
+            {
+                Material = material,
+                MeshBuffers = guiContext.MeshBufferCache,
+                MeshName = name,
+                PrimitiveType = PrimitiveType.Triangles,
+            };
+
+            var vb = vertexIndexBuffers.VertexBuffers[0];
+            var ib = vertexIndexBuffers.IndexBuffers[0];
+
+            drawCall.VertexCount = vb.ElementCount;
+            drawCall.StartIndex = 0;
+            drawCall.IndexCount = (int)ib.ElementCount;
+            drawCall.IndexType = DrawElementsType.UnsignedInt;
+
+            drawCall.VertexBuffers =
+            [
+                new VertexDrawBuffer()
+                {
+                    Handle = gpuVbib.VertexBuffers[0],
+                    ElementSizeInBytes = vb.ElementSizeInBytes,
+                    InputLayoutFields = vb.InputLayoutFields,
+                }
+            ];
+
+            drawCall.IndexBuffer = new IndexDrawBuffer()
+            {
+                Handle = gpuVbib.IndexBuffers[0],
+            };
+
+            mesh.DrawCallsOpaque.Add(drawCall);
+            return mesh;
+        }
     }
 
-    internal interface IRenderableMeshCollection
+    internal abstract class MeshCollectionNode : SceneNode
     {
-        static List<RenderableMesh> Empty = [];
-        List<RenderableMesh> RenderableMeshes { get; }
+        public abstract Vector4 Tint { get; set; }
+
+        protected MeshCollectionNode(Scene scene) : base(scene)
+        {
+        }
+
+        public List<RenderableMesh> RenderableMeshes { get; protected set; } = [];
     }
 }

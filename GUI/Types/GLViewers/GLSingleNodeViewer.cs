@@ -1,4 +1,5 @@
 using System.Reflection;
+using GUI.Types.Renderer;
 using GUI.Utils;
 using OpenTK.Graphics.OpenGL;
 using SkiaSharp;
@@ -6,7 +7,7 @@ using ValveResourceFormat;
 
 #nullable disable
 
-namespace GUI.Types.Renderer
+namespace GUI.Types.GLViewers
 {
     /// <summary>
     /// GL Render control with model controls (render mode, animation panels).
@@ -69,10 +70,11 @@ namespace GUI.Types.Renderer
         Vector2 defaultSunAngles = new(80f, 170f);
         Vector4 defaultSunColor = new Vector4(255, 247, 235, 700) / 255.0f;
 
-        Vector2 sunAngles;
+        protected Vector2 sunAngles;
 
         protected override void OnPaint(object sender, RenderEventArgs e)
         {
+            Camera.EnableMouseLook = true;
             if ((CurrentlyPressedKeys & TrackedKeys.Control) != 0)
             {
                 var delta = new Vector2(LastMouseDelta.Y, LastMouseDelta.X);
@@ -81,12 +83,13 @@ namespace GUI.Types.Renderer
                 Scene.envMapBuffer.Data.EnvMaps[0].WorldToLocal *= Matrix4x4.CreateRotationZ(-delta.Y / 80f);
                 UpdateSunAngles();
                 Scene.UpdateBuffers();
+                Camera.EnableMouseLook = false;
             }
 
             base.OnPaint(sender, e);
         }
 
-        private void UpdateSunAngles()
+        protected void UpdateSunAngles()
         {
             Scene.LightingInfo.LightingData.LightToWorld[0] = Matrix4x4.CreateRotationY(sunAngles.X * MathF.PI / 180f)
                                                              * Matrix4x4.CreateRotationZ(sunAngles.Y * MathF.PI / 180f);

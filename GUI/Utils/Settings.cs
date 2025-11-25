@@ -6,7 +6,6 @@ using ValveResourceFormat.IO;
 
 #nullable disable
 
-#pragma warning disable WFO5001
 namespace GUI.Utils
 {
     static class Settings
@@ -72,8 +71,6 @@ namespace GUI.Utils
 
         public static event EventHandler RefreshCamerasOnSave;
         public static void InvokeRefreshCamerasOnSave() => RefreshCamerasOnSave.Invoke(null, null);
-
-        public static string GpuRendererAndDriver;
 
         public static void Load()
         {

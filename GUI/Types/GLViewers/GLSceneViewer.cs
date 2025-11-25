@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.Windows.Forms;
 using GUI.Controls;
+using GUI.Types.Renderer;
 using GUI.Types.Renderer.Buffers;
 using GUI.Utils;
 using OpenTK.Graphics.OpenGL;
@@ -12,7 +13,7 @@ using ValveResourceFormat;
 
 #nullable disable
 
-namespace GUI.Types.Renderer
+namespace GUI.Types.GLViewers
 {
     internal abstract class GLSceneViewer : GLViewerControl, IDisposable
     {
@@ -26,7 +27,6 @@ namespace GUI.Types.Renderer
         private bool ShowSolidBackground;
         public bool ShowSkybox { get; set; } = true;
         public bool IsWireframe { get; set; }
-        public bool EnableOcclusionCulling { get; set; }
 
         private bool showStaticOctree;
         private bool showDynamicOctree;
@@ -43,16 +43,7 @@ namespace GUI.Types.Renderer
         private SceneBackground baseBackground;
         private OctreeDebugRenderer staticOctreeRenderer;
         private OctreeDebugRenderer dynamicOctreeRenderer;
-        protected SelectedNodeRenderer selectedNodeRenderer;
-
-        public enum DepthOnlyProgram
-        {
-            Static,
-            StaticAlphaTest,
-            Animated,
-            AnimatedEightBones,
-            OcclusionQueryAABBProxy,
-        }
+        protected SelectedNodeRenderer SelectedNodeRenderer;
         private readonly Shader[] depthOnlyShaders = new Shader[Enum.GetValues<DepthOnlyProgram>().Length];
         public Framebuffer ShadowDepthBuffer { get; private set; }
         public Framebuffer FramebufferCopy { get; private set; }
@@ -64,8 +55,6 @@ namespace GUI.Types.Renderer
 
             InitializeControl();
             AddWireframeToggleControl();
-
-            GLLoad += OnLoad;
 
 #if DEBUG
             guiContext.ShaderLoader.ShaderHotReload.ReloadShader += OnHotReload;
@@ -102,8 +91,6 @@ namespace GUI.Types.Renderer
             });
 
             AddWireframeToggleControl();
-
-            GLLoad += OnLoad;
 
 #if DEBUG
             guiContext.ShaderLoader.ShaderHotReload.ReloadShader += OnHotReload;
@@ -274,13 +261,12 @@ namespace GUI.Types.Renderer
 
         protected abstract void OnPicked(object sender, PickingTexture.PickingResponse pixelInfo);
 
-        protected virtual void OnLoad(object sender, EventArgs e)
+        protected override void OnGLLoad()
         {
             baseGrid = new InfiniteGrid(Scene);
             Skybox2D = baseBackground = new SceneBackground(Scene);
-            selectedNodeRenderer = new(this);
-
-            Picker = new PickingTexture(Scene.GuiContext, OnPicked);
+            SelectedNodeRenderer = new(GuiContext);
+            Picker = new(GuiContext, OnPicked);
 
             var shadowQuality = Settings.Config.ShadowResolution;
 
@@ -326,7 +312,6 @@ namespace GUI.Types.Renderer
 
             PostSceneLoad();
 
-            GLLoad -= OnLoad;
             GLPaint += OnPaint;
 
             GuiContext.ClearCache();
@@ -344,24 +329,28 @@ namespace GUI.Types.Renderer
 
             var renderContext = new Scene.RenderContext
             {
-                View = this,
                 Camera = Camera,
                 Framebuffer = MainFramebuffer,
+                Textures = Textures,
             };
 
             using (new GLDebugGroup("Update Loop"))
             {
-                var updateContext = new Scene.UpdateContext(e.FrameTime, this);
+                var updateContext = new Scene.UpdateContext
+                {
+                    TextRenderer = TextRenderer,
+                    Timestep = e.FrameTime,
+                };
 
                 Scene.Update(updateContext);
                 SkyboxScene?.Update(updateContext);
 
                 Scene.PostProcessInfo.UpdatePostProcessing(Camera);
 
-                selectedNodeRenderer.Update();
+                SelectedNodeRenderer.Update(renderContext, updateContext);
 
                 Scene.SetupSceneShadows(Camera, ShadowDepthBuffer.Width);
-                Scene.GetOcclusionTestResults(EnableOcclusionCulling);
+                Scene.GetOcclusionTestResults();
 
                 Scene.CollectSceneDrawCalls(Camera, lockedCullFrustum);
                 SkyboxScene?.CollectSceneDrawCalls(Camera, lockedCullFrustum);
@@ -389,7 +378,7 @@ namespace GUI.Types.Renderer
 
             using (new GLDebugGroup("Lines Render"))
             {
-                selectedNodeRenderer.Render();
+                SelectedNodeRenderer.Render();
 
                 if (showStaticOctree)
                 {
@@ -412,10 +401,10 @@ namespace GUI.Types.Renderer
         {
             var renderContext = new Scene.RenderContext
             {
-                View = this,
                 Camera = Camera,
                 Framebuffer = MainFramebuffer,
                 Scene = Scene,
+                Textures = Textures,
             };
 
             UpdatePerViewGpuBuffers(Scene, Camera);
@@ -624,6 +613,11 @@ namespace GUI.Types.Renderer
 
         protected void AddWireframeToggleControl()
         {
+            if (this is GLMaterialViewer)
+            {
+                return;
+            }
+
             AddCheckBox("Show Wireframe", false, (v) => IsWireframe = v);
         }
 
@@ -651,13 +645,13 @@ namespace GUI.Types.Renderer
 
                 if (renderMode.IsHeader)
                 {
-                    renderModeComboBox.SelectedIndex = renderModeCurrentIndex > i ? (i - 1) : (i + 1);
+                    renderModeComboBox.SelectedIndex = renderModeCurrentIndex > i ? i - 1 : i + 1;
                     return;
                 }
 
                 renderModeCurrentIndex = i;
                 SetRenderMode(renderMode.Name);
-            });
+            }, true, true);
 
             renderModeBoldFont = new Font(renderModeComboBox.Font, FontStyle.Bold);
             renderModeComboBox.DrawMode = DrawMode.OwnerDrawFixed;
@@ -766,7 +760,7 @@ namespace GUI.Types.Renderer
             viewBuffer.Data.RenderMode = RenderModes.GetShaderId(renderMode);
 
             Picker.SetRenderMode(renderMode);
-            selectedNodeRenderer.SetRenderMode(renderMode);
+            SelectedNodeRenderer.SetRenderMode(renderMode);
 
             foreach (var node in Scene.AllNodes)
             {
@@ -786,13 +780,13 @@ namespace GUI.Types.Renderer
         {
             if (e.KeyData == Keys.Delete)
             {
-                selectedNodeRenderer.DisableSelectedNodes();
+                SelectedNodeRenderer.DisableSelectedNodes();
                 return;
             }
 
             if (e.KeyData == Keys.Escape)
             {
-                selectedNodeRenderer.SelectNode(null);
+                SelectedNodeRenderer.SelectNode(null);
             }
 
             base.OnKeyDown(sender, e);
